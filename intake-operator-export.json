@@ -1,0 +1,402 @@
+{
+  "exportFormatVersion": 1,
+  "exportedAt": "2026-07-18T19:31:23.037Z",
+  "rootWorkflowId": "019f7504-445f-7000-9299-1abfa4fd2a8d",
+  "versionExportMode": "all",
+  "workflows": [
+    {
+      "sourceWorkflowId": "019f7504-445f-7000-9299-1abfa4fd2a8d",
+      "sourceDefaultVersionNumber": 2,
+      "versions": [
+        {
+          "sourceVersionId": "019f75e1-f97a-7000-af1c-a9cfcf5d6c05",
+          "versionNumber": 1,
+          "commitMessage": null,
+          "definition": {
+            "name": "Intake Operator - New Hire Onboarding",
+            "description": "Registers a new hire, normalizes their hire date, calculates their 90-day onboarding milestone (Day 1, 7, 30, 60, or 90), and updates the system of record in Supabase. Fetches the record from the 'Workers' table in Supabase, validates data (including future dates), and escalates to a human operator for review via a Workbench form if data is missing or invalid. Concludes with a final summary of the assigned milestones.",
+            "business_functions": [
+              "Human Resources",
+              "Onboarding",
+              "Operations"
+            ],
+            "envs": [
+              {
+                "name": "SUPABASE_URL",
+                "description": "The URL of your Supabase instance (e.g., https://xyzcompany.supabase.co)"
+              },
+              {
+                "name": "SUPABASE_TOKEN",
+                "description": "The Supabase API token or service role key used for authentication."
+              }
+            ],
+            "inputs": [
+              {
+                "name": "target_employee_id",
+                "description": "The unique target Employee ID to search and update in Supabase (e.g., EMP7000).",
+                "type": "text",
+                "label": "Target Employee ID",
+                "required": true
+              },
+              {
+                "name": "supabase_table_name",
+                "description": "The name of the Supabase table storing employee records. Default is 'Workers'.",
+                "type": "text",
+                "label": "Supabase Table Name",
+                "required": true,
+                "default": "Workers"
+              }
+            ],
+            "start_at": [
+              "step_0_fetch"
+            ],
+            "steps": [
+              {
+                "id": "step_0_fetch",
+                "name": "Fetch Record from Supabase",
+                "description": "Connects to Supabase to retrieve the specific worker record based on the provided Target Employee ID from the 'Workers' table.",
+                "agent_prompt": "Initialize a Supabase client using os.environ.get('SUPABASE_URL') and os.environ.get('SUPABASE_TOKEN'). Query the table from user_inputs['supabase_table_name'] where the 'Employee_ID' column matches user_inputs['target_employee_id']. Fetch and return the first matched record as a dictionary.",
+                "services": [
+                  "supabase",
+                  "python"
+                ],
+                "is_human_input_step": false,
+                "depends_on": [],
+                "code_cell": "import os\nimport json\nimport sys\nfrom supabase import create_async_client\nfrom IPython.display import HTML, display\n\nasync def step_step_0_fetch_implementation():\n    step_id = \"step_0_fetch\"\n    url = user_inputs.get('supabase_url')\n    token = user_inputs.get('supabase_token')\n    target_id = user_inputs.get('target_employee_id')\n    table_input = user_inputs.get('supabase_table_name', 'Workers')\n    \n    if not all([url, token, target_id]):\n        raise ValueError(\"Missing required inputs.\")\n\n    client = await create_async_client(url, token)\n    \n    # Strategy: try combinations of table/column names\n    tables_to_try = [table_input, table_input.lower()]\n    cols_to_try = [\"Employee_ID\", \"employee_id\"]\n    \n    step_step_0_fetch_record = {}\n    success = False\n    last_error = None\n    \n    for tbl in tables_to_try:\n        for col in cols_to_try:\n            try:\n                response = await client.table(tbl).select(\"*\").eq(col, target_id).execute()\n                step_step_0_fetch_record = response.data[0] if response.data else {}\n                success = True\n                print(f\"Successfully queried table '{tbl}' using column '{col}'.\", file=sys.stdout)\n                break\n            except Exception as e:\n                last_error = str(e)\n                continue\n        if success:\n            break\n            \n    if not success:\n        print(f\"Failed to fetch record after trying combinations. Last error: {last_error}\", file=sys.stderr)\n        display(HTML(f'<div class=\"ag-root\"><div class=\"ag-card\"><span class=\"ag-badge ag-badge-error\">Fetch Failed</span><p class=\"ag-body\">{last_error}</p></div></div>'))\n        raise Exception(f\"Database query failed: {last_error}\")\n\n    # Store and Display\n    globals()[f\"step_{step_id}_record\"] = step_step_0_fetch_record\n    print(json.dumps(step_step_0_fetch_record, indent=2, default=str))\n    \n    status_badge = '<span class=\"ag-badge ag-badge-success\">Found</span>' if step_step_0_fetch_record else '<span class=\"ag-badge ag-badge-warning\">Not Found</span>'\n    rows = \"\".join([f\"<tr><td><span class='ag-muted'>{k}</span></td><td>{v}</td></tr>\" for k, v in step_step_0_fetch_record.items()])\n    \n    display(HTML(f\"\"\"\n        <div class=\"ag-root\">\n            <div class=\"ag-card\">\n                <h2 class=\"ag-h2\">Employee Intake</h2>\n                <div style=\"margin-bottom: 12px;\">{status_badge} <span class=\"ag-muted\" style=\"margin-left: 8px;\">ID: {target_id}</span></div>\n                <table class=\"ag-table\"><tbody>{rows if step_step_0_fetch_record else '<tr><td>No data returned</td></tr>'}</tbody></table>\n            </div>\n        </div>\n    \"\"\"))\n\nawait step_step_0_fetch_implementation()\n",
+                "next_steps": [
+                  {
+                    "step_id": "step_1_validate"
+                  }
+                ]
+              },
+              {
+                "id": "step_1_validate",
+                "name": "Data Normalization & Guardrail",
+                "description": "Validates the fetched Employee ID and normalizes the Hire Date from the specific columns. Checks for missing or unparseable data. Future hire dates are explicitly allowed.",
+                "agent_prompt": "Retrieve the record from outputs['step_0_fetch']. Check if 'Employee_ID' and 'Hire_Date' are present and not empty. If present, attempt to parse 'Hire_Date' using dateutil.parser (stripping whitespace first). Note: Future dates are perfectly valid and must NOT cause is_valid to be False. Return a dictionary with 'is_valid' (boolean), 'normalized_date' (ISO format string, or None if invalid), 'error_message' (string describing what is missing/unparseable, or None if valid), and 'record' (the fetched record dict). Do not fail the script if validation fails; just set is_valid to False.",
+                "services": [
+                  "python"
+                ],
+                "is_human_input_step": false,
+                "depends_on": [
+                  "step_0_fetch"
+                ],
+                "code_cell": "import json\nimport sys\nfrom datetime import datetime\nfrom dateutil import parser\nfrom IPython.display import HTML, display\n\nasync def step_step_1_validate_implementation():\n    # Namespaced step ID and output variable\n    step_id = \"step_1_validate\"\n    output_var_name = f\"step_{step_id}_result\"\n    \n    # Retrieve input from step_0_fetch (using the global variable set by that step)\n    # The previous step stores its record in globals()[\"step_step_0_fetch_record\"]\n    fetched_record = globals().get(\"step_step_0_fetch_record\", {})\n    \n    # Initialize validation state\n    is_valid = True\n    error_message = None\n    normalized_date = None\n    \n    # Validation logic\n    if not fetched_record:\n        is_valid = False\n        error_message = \"No record found to validate.\"\n    else:\n        # Check for presence of required keys\n        # We check for standard capitalization as well as lowercase just in case\n        emp_id = fetched_record.get(\"Employee_ID\") or fetched_record.get(\"employee_id\")\n        hire_date_raw = fetched_record.get(\"Hire_Date\") or fetched_record.get(\"hire_date\")\n        \n        if not emp_id:\n            is_valid = False\n            error_message = \"Employee ID is missing or empty.\"\n        elif not hire_date_raw:\n            is_valid = False\n            error_message = \"Hire Date is missing or empty.\"\n        else:\n            try:\n                # Normalize Hire Date: strip whitespace and parse\n                clean_date_str = str(hire_date_raw).strip()\n                dt_obj = parser.parse(clean_date_str)\n                normalized_date = dt_obj.isoformat()\n            except (ValueError, TypeError, OverflowError) as e:\n                is_valid = False\n                error_message = f\"Invalid date format for '{hire_date_raw}': {str(e)}\"\n\n    # Construct the result payload\n    result_payload = {\n        \"is_valid\": is_valid,\n        \"normalized_date\": normalized_date,\n        \"error_message\": error_message,\n        \"record\": fetched_record\n    }\n    \n    # Store result for downstream steps and parallel safety\n    globals()[output_var_name] = result_payload\n    \n    # 1. Stdout: Programmatic JSON output\n    print(json.dumps(result_payload, indent=2, default=str))\n    \n    # 2. UI: Atmospheric Glass HTML summary\n    status_badge = (\n        '<span class=\"ag-badge ag-badge-success\">Valid</span>' \n        if is_valid else \n        '<span class=\"ag-badge ag-badge-error\">Invalid</span>'\n    )\n    \n    # Build HTML summary\n    html_output = f\"\"\"\n    <div class=\"ag-root\">\n        <div class=\"ag-card\">\n            <h2 class=\"ag-h2\">Data Validation</h2>\n            <div style=\"margin-bottom: 16px;\">\n                {status_badge}\n            </div>\n            \n            <table class=\"ag-table\">\n                <thead>\n                    <tr>\n                        <th>Field</th>\n                        <th>Value</th>\n                    </tr>\n                </thead>\n                <tbody>\n                    <tr>\n                        <td><span class=\"ag-muted\">Employee ID</span></td>\n                        <td>{fetched_record.get('Employee_ID', fetched_record.get('employee_id', '—'))}</td>\n                    </tr>\n                    <tr>\n                        <td><span class=\"ag-muted\">Original Hire Date</span></td>\n                        <td>{fetched_record.get('Hire_Date', fetched_record.get('hire_date', '—'))}</td>\n                    </tr>\n                    <tr>\n                        <td><span class=\"ag-muted\">Normalized Date</span></td>\n                        <td>{normalized_date if normalized_date else '—'}</td>\n                    </tr>\n                </tbody>\n            </table>\n            \n            {f'<p class=\"ag-body\" style=\"margin-top: 12px;\"><span class=\"ag-badge ag-badge-warning\">Reason</span> {error_message}</p>' if error_message else ''}\n        </div>\n    </div>\n    \"\"\"\n    display(HTML(html_output))\n\n# Execute the implementation\nawait step_step_1_validate_implementation()\n",
+                "next_steps": [
+                  {
+                    "step_id": "step_2_process",
+                    "condition": {
+                      "id": "cond_valid",
+                      "name": "Data Valid",
+                      "description": "Data is valid",
+                      "agent_prompt": "Return True if outputs['step_1_validate']['is_valid'] is True, otherwise False.",
+                      "condition_code_cell": "# Namespaced helper variables for condition cond_valid\ncond_cond_valid_step_output = globals().get(\"step_step_1_validate_result\", {})\ncond_cond_valid_is_valid = False\n\n# Evaluate if the validation result from step_1_validate indicates success\nif isinstance(cond_cond_valid_step_output, dict):\n    # Check explicitly if the 'is_valid' flag is True\n    if cond_cond_valid_step_output.get(\"is_valid\") is True:\n        cond_cond_valid_is_valid = True\n\n# Output the boolean result as the only stdout for the engine to parse\nprint(cond_cond_valid_is_valid)\n"
+                    }
+                  },
+                  {
+                    "step_id": "step_3_workbench",
+                    "condition": {
+                      "id": "cond_invalid",
+                      "name": "Data Invalid",
+                      "description": "Data is missing or invalid",
+                      "agent_prompt": "Return True if outputs['step_1_validate']['is_valid'] is False, otherwise False.",
+                      "condition_code_cell": "# Namespaced helper variables for condition cond_invalid\ncond_cond_invalid_step_output = globals().get(\"step_step_1_validate_result\", {})\ncond_cond_invalid_should_escalate = False\n\n# The condition logic: Return True if outputs['step_1_validate']['is_valid'] is False\nif isinstance(cond_cond_invalid_step_output, dict):\n    # Check explicitly if is_valid is False. \n    # If the key is missing, we treat it as invalid (True for escalation) as a safety measure.\n    if cond_cond_invalid_step_output.get(\"is_valid\") is False:\n        cond_cond_invalid_should_escalate = True\n\n# Output the boolean result as the only stdout for the engine to parse\nprint(cond_cond_invalid_should_escalate)"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "step_2_process",
+                "name": "Calculate Milestone & Update System of Record",
+                "description": "Calculates the days in the program, determines the current milestone window (including Pre-boarding for future dates), and updates the Supabase system of record.",
+                "agent_prompt": "Using the 'normalized_date' output from step_1_validate, compute 'day_in_program' (number of days between the normalized_date and today. If normalized_date is in the future, day_in_program should be a negative number). Based on 'day_in_program', determine the closest 'milestone_window' from [1, 7, 30, 60, 90] and format as 'Day {X}'. If day_in_program <= 0, set 'milestone_window' to 'Pre-boarding'. Initialize a Supabase client using os.environ.get('SUPABASE_URL') and os.environ.get('SUPABASE_TOKEN'). Update the row in user_inputs['supabase_table_name'] where 'Employee_ID' matches user_inputs['target_employee_id'], setting 'day_in_program' and 'milestone_window'. Return the updated record.",
+                "services": [
+                  "supabase",
+                  "python"
+                ],
+                "is_human_input_step": false,
+                "depends_on": [
+                  "step_1_validate"
+                ],
+                "code_cell": "import os\nimport json\nimport sys\nfrom datetime import datetime, timezone\nfrom dateutil import parser\nfrom supabase import create_async_client\nfrom IPython.display import HTML, display\n\nasync def step_step2_process_implementation():\n    step_id = \"step_2_process\"\n    output_var_name = f\"step_{step_id}_updated_record\"\n    \n    # 1. Retrieve Context\n    validation_result = globals().get(\"step_step_1_validate_result\", {})\n    normalized_date_str = validation_result.get(\"normalized_date\")\n    # This is the original record fetched from DB\n    record = validation_result.get(\"record\", {}).copy()\n    \n    supabase_url = user_inputs.get('supabase_url')\n    supabase_token = user_inputs.get('supabase_token')\n    table_input = user_inputs.get('supabase_table_name', 'Workers')\n    target_id = user_inputs.get('target_employee_id')\n\n    # 2. Calculation\n    hire_date = parser.isoparse(normalized_date_str)\n    now = datetime.now(timezone.utc) if hire_date.tzinfo else datetime.now()\n    day_in_program = (now - hire_date).days\n    milestones = [1, 7, 30, 60, 90]\n    closest_val = min(milestones, key=lambda x: abs(x - day_in_program))\n    milestone_label = f\"Day {closest_val}\"\n\n    # 3. Enrichment and Database Sync Attempt\n    # Always enrich the local record object for downstream consistency\n    record[\"day_in_program\"] = day_in_program\n    record[\"milestone_window\"] = milestone_label\n\n    db_success = False\n    error_note = \"\"\n\n    client = await create_async_client(supabase_url, supabase_token)\n    \n    # Resilient target selection\n    column_to_match = \"Employee_ID\" if \"Employee_ID\" in record else \"employee_id\"\n    tables_to_try = [table_input, table_input.lower()]\n\n    for tbl in tables_to_try:\n        try:\n            # Attempt update\n            response = await client.table(tbl).update({\n                \"day_in_program\": day_in_program,\n                \"milestone_window\": milestone_label\n            }).eq(column_to_match, target_id).execute()\n            \n            if response.data:\n                db_success = True\n                record = response.data[0] # Use the actual record from DB if update succeeded\n                break\n        except Exception as e:\n            error_note = str(e)\n            continue\n\n    # 4. Final Result Handling\n    globals()[output_var_name] = record\n    print(json.dumps(record, indent=2, default=str))\n\n    # UI Feedback\n    if db_success:\n        status_badge = '<span class=\"ag-badge ag-badge-success\">Sync Successful</span>'\n        footer_note = f\"Record in table '{table_input}' was successfully updated.\"\n    else:\n        # Determine if it was a schema mismatch or a real connectivity error\n        if \"column\" in error_note.lower():\n            status_badge = '<span class=\"ag-badge ag-badge-warning\">Local Only</span>'\n            footer_note = f\"Note: Database table '{table_input}' is missing 'day_in_program' or 'milestone_window' columns. Values were calculated and passed to the next workflow step, but not saved to the system of record.\"\n        else:\n            status_badge = '<span class=\"ag-badge ag-badge-error\">Sync Failed</span>'\n            footer_note = f\"Warning: {error_note}. Calculations were performed locally.\"\n\n    display(HTML(f\"\"\"\n        <div class=\"ag-root\">\n            <div class=\"ag-card\">\n                <h2 class=\"ag-h2\">Onboarding Calculation Complete</h2>\n                <div style=\"margin-bottom: 16px;\">\n                    {status_badge}\n                    <span class=\"ag-muted\" style=\"margin-left: 8px;\">ID: {target_id}</span>\n                </div>\n                \n                <table class=\"ag-table\">\n                    <thead>\n                        <tr>\n                            <th>Calculated Field</th>\n                            <th>Value</th>\n                        </tr>\n                    </thead>\n                    <tbody>\n                        <tr>\n                            <td><span class=\"ag-muted\">Day in Program</span></td>\n                            <td><span class=\"ag-metric\">{day_in_program}</span></td>\n                        </tr>\n                        <tr>\n                            <td><span class=\"ag-muted\">Milestone Window</span></td>\n                            <td><span class=\"ag-badge ag-badge-neutral\">{milestone_label}</span></td>\n                        </tr>\n                    </tbody>\n                </table>\n                \n                <p class=\"ag-body\" style=\"margin-top: 16px; font-size: 0.9em;\">\n                    <span class=\"ag-muted\">{footer_note}</span>\n                </p>\n            </div>\n        </div>\n    \"\"\"))\n\nawait step_step2_process_implementation()\n",
+                "next_steps": [
+                  {
+                    "step_id": "step_5_summary"
+                  }
+                ]
+              },
+              {
+                "id": "step_3_workbench",
+                "name": "Workbench Escalation",
+                "description": "Pauses the workflow and requests human review to fix missing or invalid Employee_ID or Hire_Date in the fetched record.",
+                "agent_prompt": "Call create_human_input_form to create an escalation form for the Workbench operator. Display the error message from step_1_validate indicating why validation failed for the fetched record. Add two required fields to the form: 'corrected_Employee_ID' (text) and 'corrected_Hire_Date' (date). Return the form URL.",
+                "services": [
+                  "human_input_form"
+                ],
+                "is_human_input_step": true,
+                "depends_on": [
+                  "step_1_validate"
+                ],
+                "code_cell": "import os\nimport json\nimport asyncio\nimport sys\nfrom datetime import datetime\nfrom dateutil import parser\nfrom supabase import create_async_client\nfrom IPython.display import HTML, display\n\nasync def step_step_4_process_post_workbench_implementation():\n    # 1. Namespaced definitions for safety\n    step_id = \"step_4_process_post_workbench\"\n    \n    # 2. Retrieve inputs from Workbench and initial user inputs\n    workbench_data = user_inputs.get('step_3_workbench', {})\n    target_emp_id = user_inputs.get('target_employee_id')\n    \n    # Check if the record was approved/submitted or rejected\n    if not workbench_data.get('is_approved'):\n        print(\"Workflow terminated: Record rejected in manual review.\", file=sys.stdout)\n        display(HTML(\"\"\"\n            <div class=\"ag-root\">\n                <div class=\"ag-card\">\n                    <h2 class=\"ag-h2\">Review Rejected</h2>\n                    <span class=\"ag-badge ag-badge-error\">Action Cancelled</span>\n                    <p class=\"ag-body\" style=\"margin-top:12px;\">The Workbench operator rejected this record. No updates have been made to the system of record.</p>\n                </div>\n            </div>\n        \"\"\"))\n        return\n\n    corrected_id = workbench_data.get('corrected_Employee_ID')\n    corrected_date_str = workbench_data.get('corrected_Hire_Date')\n\n    # Configuration from environment\n    supabase_url = os.environ.get('SUPABASE_URL')\n    supabase_token = os.environ.get('SUPABASE_TOKEN')\n    table_name = os.environ.get('SUPABASE_TABLE_NAME', 'Workers')\n\n    try:\n        # 3. Data Normalization & Calculation\n        # Parse corrected date\n        dt_hire = parser.parse(str(corrected_date_str))\n        dt_now = datetime.now()\n        \n        # Calculate days in program (today - hire_date)\n        day_in_program = (dt_now - dt_hire).days\n        \n        # Determine closest milestone window (1, 7, 30, 60, 90)\n        milestones = [1, 7, 30, 60, 90]\n        closest_milestone = min(milestones, key=lambda x: abs(x - day_in_program))\n        milestone_label = f\"Day {closest_milestone}\"\n\n        # 4. Supabase Update\n        if not supabase_url or not supabase_token:\n             raise ValueError(\"Supabase credentials missing.\")\n\n        client = await create_async_client(supabase_url, supabase_token)\n        \n        update_payload = {\n            \"Employee_ID\": corrected_id,\n            \"Hire_Date\": dt_hire.isoformat(),\n            \"day_in_program\": day_in_program,\n            \"milestone_window\": milestone_label\n        }\n        \n        # Perform the update where Employee_ID matches the target\n        # Using a try/except for column naming variations (Employee_ID vs employee_id)\n        try:\n            response = await client.table(table_name).update(update_payload).eq(\"Employee_ID\", target_emp_id).execute()\n        except Exception:\n            response = await client.table(table_name).update(update_payload).eq(\"employee_id\", target_emp_id).execute()\n            \n        updated_data = response.data[0] if response.data else {}\n\n        # 5. Store result for persistence\n        globals()[f\"step_{step_id}_updated_record\"] = updated_data\n        \n        # 6. Technical Output (Stdout)\n        print(json.dumps(updated_data, indent=2, default=str))\n\n        # 7. Human-friendly UI Output (Atmospheric Glass)\n        display(HTML(f\"\"\"\n            <div class=\"ag-root\">\n                <div class=\"ag-card\">\n                    <h2 class=\"ag-h2\">System of Record Updated</h2>\n                    <div style=\"margin-bottom: 16px;\">\n                        <span class=\"ag-badge ag-badge-success\">Success</span>\n                        <span class=\"ag-muted\" style=\"margin-left: 8px;\">Record verified and milestones calculated.</span>\n                    </div>\n                    \n                    <table class=\"ag-table\">\n                        <thead>\n                            <tr>\n                                <th>Field</th>\n                                <th>New Value</th>\n                            </tr>\n                        </thead>\n                        <tbody>\n                            <tr>\n                                <td><span class=\"ag-muted\">Corrected ID</span></td>\n                                <td>{corrected_id}</td>\n                            </tr>\n                            <tr>\n                                <td><span class=\"ag-muted\">Day in Program</span></td>\n                                <td><span class=\"ag-metric\">{day_in_program}</span></td>\n                            </tr>\n                            <tr>\n                                <td><span class=\"ag-muted\">Milestone Window</span></td>\n                                <td><span class=\"ag-badge ag-badge-neutral\">{milestone_label}</span></td>\n                            </tr>\n                        </tbody>\n                    </table>\n                    \n                    <p class=\"ag-body\" style=\"margin-top: 16px;\">\n                        The worker record for <strong>{target_emp_id}</strong> has been successfully synchronized with the corrections provided in review.\n                    </p>\n                </div>\n            </div>\n        \"\"\"))\n\n    except Exception as e:\n        print(f\"Error in {step_id}: {str(e)}\", file=sys.stderr)\n        display(HTML(f\"\"\"\n            <div class=\"ag-root\">\n                <div class=\"ag-card\">\n                    <h2 class=\"ag-h2\">Update Failed</h2>\n                    <span class=\"ag-badge ag-badge-error\">Execution Error</span>\n                    <p class=\"ag-body\" style=\"margin-top:12px;\">{str(e)}</p>\n                </div>\n            </div>\n        \"\"\"))\n        raise\n\n# Execute the step implementation\nawait step_step_4_process_post_workbench_implementation()\n",
+                "next_steps": [
+                  {
+                    "step_id": "step_4_process_post_workbench",
+                    "condition": {
+                      "id": "cond_workbench_approved",
+                      "name": "Workbench Approved",
+                      "description": "Proceeds only if the workbench review form was approved/submitted.",
+                      "agent_prompt": "Return True if user_inputs.get('step_3_workbench', {}).get('is_approved') is True, otherwise False.",
+                      "condition_code_cell": ""
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "step_4_process_post_workbench",
+                "name": "Calculate & Update System of Record (Post-Review)",
+                "description": "Calculates the milestones using the manually corrected data (including Pre-boarding for future dates) and updates the Supabase system of record.",
+                "agent_prompt": "Retrieve 'corrected_Employee_ID' and 'corrected_Hire_Date' from user_inputs['step_3_workbench']. Parse 'corrected_Hire_Date' using dateutil.parser. Compute 'day_in_program' (today minus corrected hire date in days. If the hire date is in the future, this should be a negative number). Determine the closest 'milestone_window' from [1, 7, 30, 60, 90] and format as 'Day {X}'. If day_in_program <= 0, set 'milestone_window' to 'Pre-boarding'. Initialize a Supabase client using os.environ.get('SUPABASE_URL') and os.environ.get('SUPABASE_TOKEN'). Update the row in user_inputs['supabase_table_name'] where 'Employee_ID' matches user_inputs['target_employee_id'], setting 'Employee_ID' to the corrected ID, 'Hire_Date' to the corrected date, along with 'day_in_program' and 'milestone_window'. Return the updated record.",
+                "services": [
+                  "supabase",
+                  "python"
+                ],
+                "is_human_input_step": false,
+                "depends_on": [
+                  "step_3_workbench"
+                ],
+                "next_steps": [
+                  {
+                    "step_id": "step_5_summary"
+                  }
+                ]
+              },
+              {
+                "id": "step_5_summary",
+                "name": "Final Success Summary",
+                "description": "Provides a user-friendly final output summarizing the calculated milestones and confirming the process was successful.",
+                "agent_prompt": "Retrieve the updated record from either outputs.get('step_2_process') or outputs.get('step_4_process_post_workbench') depending on which path was executed. Extract 'Employee_ID' (or 'employee_id'), 'day_in_program', and 'milestone_window' from the record. Display the final message in a clear format: \"Success: [Employee_ID]'s 90-day clock has started. Currently on Day [day_in_program] (Milestone: [milestone_window]).\" Return the final summary text.",
+                "services": [
+                  "python",
+                  "output_artifacts"
+                ],
+                "is_human_input_step": false,
+                "depends_on": [
+                  "step_2_process",
+                  "step_4_process_post_workbench"
+                ],
+                "next_steps": []
+              }
+            ],
+            "pip_packages": [
+              "python-dateutil",
+              "supabase",
+              "httpx"
+            ],
+            "integration_overrides": {}
+          }
+        },
+        {
+          "sourceVersionId": "019f76af-b2e7-7000-bb3f-fb5d0a640b9c",
+          "versionNumber": 2,
+          "commitMessage": null,
+          "definition": {
+            "name": "Intake Operator",
+            "description": "Registers a new hire, normalizes their hire date, calculates their 90-day onboarding milestone (Day 1, 7, 30, 60, or 90), and updates the system of record in Supabase. Fetches the record from the 'workers' table in Supabase, validates data (including future dates), and escalates to a human operator for review via a Workbench form if data is missing or invalid. Concludes with a final summary of the assigned milestones. Updated to use a user-provided Service Role Key.",
+            "business_functions": [
+              "Human Resources",
+              "Onboarding",
+              "Operations"
+            ],
+            "envs": [
+              {
+                "name": "SUPABASE_URL",
+                "description": "The URL of your Supabase instance (e.g., https://xyzcompany.supabase.co)"
+              },
+              {
+                "name": "SUPABASE_SERVICE_ROLE_KEY",
+                "description": "The Supabase Service Role Key used for authentication (to bypass the 401 error)."
+              }
+            ],
+            "inputs": [
+              {
+                "name": "target_employee_id",
+                "description": "The unique target Employee ID to search and update in Supabase (e.g., EMP7000).",
+                "type": "text",
+                "label": "Target Employee ID",
+                "required": true
+              },
+              {
+                "name": "supabase_table_name",
+                "description": "The name of the Supabase table storing employee records. Default is 'workers'.",
+                "type": "text",
+                "label": "Supabase Table Name",
+                "required": true,
+                "default": "workers"
+              }
+            ],
+            "start_at": [
+              "step_0_fetch"
+            ],
+            "steps": [
+              {
+                "id": "step_0_fetch",
+                "name": "Fetch Record from Supabase",
+                "description": "Connects to Supabase to retrieve the specific worker record based on the provided Target Employee ID from the 'workers' table.",
+                "agent_prompt": "Initialize a Supabase client using os.environ.get('SUPABASE_URL') and os.environ.get('SUPABASE_SERVICE_ROLE_KEY'). Query the table from user_inputs['supabase_table_name'] where the 'Employee_ID' column matches user_inputs['target_employee_id']. Fetch and return the first matched record as a dictionary.",
+                "services": [
+                  "supabase",
+                  "python"
+                ],
+                "is_human_input_step": false,
+                "depends_on": [],
+                "code_cell": "import os\nimport json\nimport sys\nfrom supabase import create_async_client\nfrom IPython.display import HTML, display\n\nasync def step_step_0_fetch_implementation():\n    # Namespaced step state\n    step_id = \"step_0_fetch\"\n    output_var_name = f\"step_{step_id}_record\"\n    \n    # 1. Retrieve configuration from environment and inputs\n    url = os.environ.get('SUPABASE_URL')\n    key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY')\n    \n    # target_employee_id is required per workflow definition\n    target_id = user_inputs.get('target_employee_id')\n    # Default to lowercase 'workers' as per new prompt requirement\n    table_name = user_inputs.get('supabase_table_name', 'workers')\n    \n    if not url or not key:\n        print(\"Error: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY environment variables are not set.\", file=sys.stderr)\n        raise ValueError(\"Missing Supabase credentials in environment.\")\n        \n    if not target_id:\n        print(\"Error: target_employee_id is missing from user_inputs.\", file=sys.stderr)\n        raise ValueError(\"Missing target_employee_id input.\")\n\n    # 2. Execute database query\n    client = await create_async_client(url, key)\n    \n    record = {}\n    try:\n        # Querying the specified table for the provided Employee ID\n        # The prompt specifies the column 'Employee_ID'\n        response = await client.table(table_name).select(\"*\").eq(\"Employee_ID\", target_id).execute()\n        \n        # Fallback check for 'employee_id' if 'Employee_ID' returns nothing (common schema variation)\n        if not response.data:\n            response = await client.table(table_name).select(\"*\").eq(\"employee_id\", target_id).execute()\n            \n        record = response.data[0] if response.data else {}\n        \n    except Exception as e:\n        print(f\"Error querying Supabase table '{table_name}': {str(e)}\", file=sys.stderr)\n        display(HTML(f'''\n            <div class=\"ag-root\">\n                <div class=\"ag-card\">\n                    <span class=\"ag-badge ag-badge-error\">Database Error</span>\n                    <p class=\"ag-body\">Failed to query table \"{table_name}\". Please verify the table exists and columns \"Employee_ID\" or \"employee_id\" are present.</p>\n                    <p class=\"ag-muted\" style=\"margin-top: 8px;\">{str(e)}</p>\n                </div>\n            </div>\n        '''))\n        raise e\n\n    # 3. Persistence and Debug Trace\n    # Store the record in the expected namespaced variable\n    globals()[output_var_name] = record\n    \n    # Print the JSON result as requested for the step output\n    print(json.dumps(record, indent=2, default=str))\n\n    # 4. User-Facing Summary\n    found = bool(record)\n    status_badge = (\n        '<span class=\"ag-badge ag-badge-success\">Record Found</span>' \n        if found else \n        '<span class=\"ag-badge ag-badge-warning\">No Record Found</span>'\n    )\n    \n    rows_html = \"\"\n    if found:\n        # Sort keys for a clean presentation\n        for k in sorted(record.keys()):\n            val = record[k]\n            rows_html += f\"<tr><td><span class='ag-muted'>{k}</span></td><td>{val if val is not None else '—'}</td></tr>\"\n    else:\n        rows_html = f\"<tr><td colspan='2'><span class='ag-muted'>No data found for ID: {target_id}</span></td></tr>\"\n\n    display(HTML(f\"\"\"\n        <div class=\"ag-root\">\n            <div class=\"ag-card\">\n                <h2 class=\"ag-h2\">Employee Data Retrieval</h2>\n                <div style=\"margin-bottom: 16px;\">\n                    {status_badge}\n                    <span class=\"ag-muted\" style=\"margin-left: 12px;\">ID: {target_id}</span>\n                </div>\n                \n                <table class=\"ag-table\">\n                    <thead>\n                        <tr>\n                            <th>Field</th>\n                            <th>Value</th>\n                        </tr>\n                    </thead>\n                    <tbody>\n                        {rows_html}\n                    </tbody>\n                </table>\n                \n                <p class=\"ag-body\" style=\"margin-top: 16px;\">\n                    <span class=\"ag-muted\">Source Table:</span> <code>{table_name}</code>\n                </p>\n            </div>\n        </div>\n    \"\"\"))\n\n# Run the implementation\nawait step_step_0_fetch_implementation()\n",
+                "next_steps": [
+                  {
+                    "step_id": "step_1_validate"
+                  }
+                ]
+              },
+              {
+                "id": "step_1_validate",
+                "name": "Data Normalization & Guardrail",
+                "description": "Validates the fetched Employee ID and normalizes the Hire Date from the specific columns. Checks for missing or unparseable data. Future hire dates are explicitly allowed.",
+                "agent_prompt": "Retrieve the record from outputs['step_0_fetch']. Check if 'Employee_ID' and 'Hire_Date' are present and not empty. If present, attempt to parse 'Hire_Date' using dateutil.parser (stripping whitespace first). Note: Future dates are perfectly valid and must NOT cause is_valid to be False. Return a dictionary with 'is_valid' (boolean), 'normalized_date' (ISO format string, or None if invalid), 'error_message' (string describing what is missing/unparseable, or None if valid), and 'record' (the fetched record dict). Do not fail the script if validation fails; just set is_valid to False.",
+                "services": [
+                  "python"
+                ],
+                "is_human_input_step": false,
+                "depends_on": [
+                  "step_0_fetch"
+                ],
+                "code_cell": "import json\nimport sys\nfrom datetime import datetime\nfrom dateutil import parser\nfrom IPython.display import HTML, display\n\nasync def step_step_1_validate_implementation():\n    # Namespaced step ID and output variable\n    step_id = \"step_1_validate\"\n    output_var_name = f\"step_{step_id}_result\"\n    \n    # Retrieve record from step_0_fetch (namespaced as per previous step execution)\n    # The previous step stores its record in globals()[\"step_step_0_fetch_record\"]\n    fetched_record = globals().get(\"step_step_0_fetch_record\", {})\n    \n    # Initialize validation state\n    is_valid = True\n    error_message = None\n    normalized_date = None\n    \n    # Validation logic\n    if not fetched_record:\n        is_valid = False\n        error_message = \"No worker record was found in the database for the provided Employee ID.\"\n    else:\n        # Check for presence of required keys (Employee_ID and Hire_Date)\n        # Using .get() for case-sensitivity variations common in DB schemas\n        emp_id = fetched_record.get(\"Employee_ID\") or fetched_record.get(\"employee_id\")\n        hire_date_raw = fetched_record.get(\"Hire_Date\") or fetched_record.get(\"hire_date\")\n        \n        if not emp_id:\n            is_valid = False\n            error_message = \"Required field 'Employee_ID' is missing or empty in the record.\"\n        elif not hire_date_raw:\n            is_valid = False\n            error_message = \"Required field 'Hire_Date' is missing or empty in the record.\"\n        else:\n            try:\n                # Normalize Hire Date: strip whitespace and parse\n                clean_date_str = str(hire_date_raw).strip()\n                # parser.parse handles most common date formats\n                dt_obj = parser.parse(clean_date_str)\n                normalized_date = dt_obj.isoformat()\n                \n                # REQUIREMENT: Future dates are explicitly allowed. \n                # No additional comparison against datetime.now() is performed to invalidate the record.\n                \n            except (ValueError, TypeError, OverflowError) as e:\n                is_valid = False\n                error_message = f\"Invalid date format for '{hire_date_raw}': {str(e)}\"\n\n    # Construct the result payload\n    result_payload = {\n        \"is_valid\": is_valid,\n        \"normalized_date\": normalized_date,\n        \"error_message\": error_message,\n        \"record\": fetched_record\n    }\n    \n    # Store result for downstream steps and parallel safety\n    globals()[output_var_name] = result_payload\n    \n    # 1. Stdout: Programmatic JSON output for the engine/logs\n    print(json.dumps(result_payload, indent=2, default=str))\n    \n    # 2. UI: Atmospheric Glass HTML summary\n    status_badge = (\n        '<span class=\"ag-badge ag-badge-success\">Validation Passed</span>' \n        if is_valid else \n        '<span class=\"ag-badge ag-badge-error\">Validation Failed</span>'\n    )\n    \n    # Build HTML summary\n    html_output = f\"\"\"\n    <div class=\"ag-root\">\n        <div class=\"ag-card\">\n            <h2 class=\"ag-h2\">Data Validation & Normalization</h2>\n            <div style=\"margin-bottom: 16px;\">\n                {status_badge}\n            </div>\n            \n            <table class=\"ag-table\">\n                <thead>\n                    <tr>\n                        <th>Field</th>\n                        <th>Value</th>\n                    </tr>\n                </thead>\n                <tbody>\n                    <tr>\n                        <td><span class=\"ag-muted\">Employee ID</span></td>\n                        <td>{fetched_record.get('Employee_ID', fetched_record.get('employee_id', '—'))}</td>\n                    </tr>\n                    <tr>\n                        <td><span class=\"ag-muted\">Raw Hire Date</span></td>\n                        <td>{fetched_record.get('Hire_Date', fetched_record.get('hire_date', '—'))}</td>\n                    </tr>\n                    <tr>\n                        <td><span class=\"ag-muted\">Normalized ISO Date</span></td>\n                        <td>{normalized_date if normalized_date else '—'}</td>\n                    </tr>\n                </tbody>\n            </table>\n            \n            {f'<div style=\"margin-top: 16px;\"><span class=\"ag-badge ag-badge-warning\">Reason</span> <span class=\"ag-body\">{error_message}</span></div>' if error_message else '<p class=\"ag-body\" style=\"margin-top: 12px;\"><span class=\"ag-muted\">Note: Future hire dates are valid and permitted.</span></p>'}\n        </div>\n    </div>\n    \"\"\"\n    display(HTML(html_output))\n\n# Execute the implementation\nawait step_step_1_validate_implementation()\n",
+                "next_steps": [
+                  {
+                    "step_id": "step_2_process",
+                    "condition": {
+                      "id": "cond_valid",
+                      "name": "Data Valid",
+                      "description": "Data is valid",
+                      "agent_prompt": "Return True if outputs['step_1_validate']['is_valid'] is True, otherwise False.",
+                      "condition_code_cell": "# Namespaced helper variables for condition cond_valid\ncond_cond_valid_step_output = globals().get(\"step_step_1_validate_result\", {})\ncond_cond_valid_is_valid = False\n\n# Evaluate if the validation result from step_1_validate indicates success\nif isinstance(cond_cond_valid_step_output, dict):\n    # Check explicitly if the 'is_valid' flag is True\n    if cond_cond_valid_step_output.get(\"is_valid\") is True:\n        cond_cond_valid_is_valid = True\n\n# Output the boolean result as the only stdout for the engine to parse\nprint(cond_cond_valid_is_valid)\n"
+                    }
+                  },
+                  {
+                    "step_id": "step_3_workbench",
+                    "condition": {
+                      "id": "cond_invalid",
+                      "name": "Data Invalid",
+                      "description": "Data is missing or invalid",
+                      "agent_prompt": "Return True if outputs['step_1_validate']['is_valid'] is False, otherwise False.",
+                      "condition_code_cell": "# Namespaced helper variables for condition cond_invalid\ncond_cond_invalid_step_output = globals().get(\"step_step_1_validate_result\", {})\ncond_cond_invalid_should_escalate = False\n\n# The condition logic: Return True if outputs['step_1_validate']['is_valid'] is False\nif isinstance(cond_cond_invalid_step_output, dict):\n    # Check explicitly if is_valid is False. \n    # If the key is missing, we treat it as invalid (True for escalation) as a safety measure.\n    if cond_cond_invalid_step_output.get(\"is_valid\") is False:\n        cond_cond_invalid_should_escalate = True\n\n# Output the boolean result as the only stdout for the engine to parse\nprint(cond_cond_invalid_should_escalate)"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "step_2_process",
+                "name": "Calculate Milestone & Update System of Record",
+                "description": "Calculates the days in the program, determines the current milestone window (including Pre-boarding for future dates), and updates the Supabase system of record.",
+                "agent_prompt": "Using the 'normalized_date' output from step_1_validate, compute 'day_in_program' (number of days between the normalized_date and today. If normalized_date is in the future, day_in_program should be a negative number). Based on 'day_in_program', determine the closest 'milestone_window' from [1, 7, 30, 60, 90] and format as 'Day {X}'. If day_in_program <= 0, set 'milestone_window' to 'Pre-boarding'. Initialize a Supabase client using os.environ.get('SUPABASE_URL') and os.environ.get('SUPABASE_SERVICE_ROLE_KEY'). Update the row in user_inputs['supabase_table_name'] where 'Employee_ID' matches user_inputs['target_employee_id'], setting 'day_in_program' and 'milestone_window'. Return the updated record.",
+                "services": [
+                  "supabase",
+                  "python"
+                ],
+                "is_human_input_step": false,
+                "depends_on": [
+                  "step_1_validate"
+                ],
+                "code_cell": "import os\nimport json\nimport sys\nfrom datetime import datetime, timezone\nfrom dateutil import parser\nfrom supabase import create_async_client\nfrom IPython.display import HTML, display\n\nasync def step_step_2_process_implementation():\n    # Namespaced step state\n    step_id = \"step_2_process\"\n    output_var_name = f\"step_{step_id}_result\"\n    \n    # 1. Retrieve Context\n    # Access results from step_1_validate\n    validation_output = globals().get(\"step_step_1_validate_result\", {})\n    normalized_date_str = validation_output.get(\"normalized_date\")\n    original_record = validation_output.get(\"record\", {}).copy()\n    \n    target_id = user_inputs.get('target_employee_id')\n    table_name = user_inputs.get('supabase_table_name', 'workers')\n    \n    # Supabase credentials from environment\n    url = os.environ.get('SUPABASE_URL')\n    key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY')\n    \n    if not url or not key:\n        raise ValueError(\"Missing Supabase credentials (SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY) in environment.\")\n\n    # 2. Calculation Logic\n    # We use isoparse because we normalized it in step 1\n    hire_date = parser.isoparse(normalized_date_str)\n    \n    # Handle timezone awareness for comparison\n    now = datetime.now(timezone.utc) if hire_date.tzinfo else datetime.now()\n    \n    # Calculate days in program (Current Date - Hire Date)\n    day_in_program = (now - hire_date).days\n    \n    # Milestone Window Logic\n    if day_in_program <= 0:\n        milestone_window = \"Pre-boarding\"\n    else:\n        milestones = [1, 7, 30, 60, 90]\n        # Find the closest value in the list based on absolute difference\n        closest_val = min(milestones, key=lambda x: abs(x - day_in_program))\n        milestone_window = f\"Day {closest_val}\"\n\n    # 3. Enrichment & Database Sync\n    # We enrich the local record to ensure the workflow proceeds even if DB update fails\n    enriched_record = original_record.copy()\n    enriched_record[\"day_in_program\"] = day_in_program\n    enriched_record[\"milestone_window\"] = milestone_window\n\n    db_success = False\n    status_msg = \"Calculated metrics successfully.\"\n    \n    client = await create_async_client(url, key)\n    \n    try:\n        # Prepare the update payload\n        update_payload = {\n            \"day_in_program\": day_in_program,\n            \"milestone_window\": milestone_window\n        }\n        \n        # Check for column naming convention in the record we fetched\n        match_col = \"Employee_ID\" if \"Employee_ID\" in enriched_record else \"employee_id\"\n        \n        # Attempt to update the worker record in Supabase\n        response = await client.table(table_name).update(update_payload).eq(match_col, target_id).execute()\n        \n        if response.data:\n            db_success = True\n            # Update local record with any values returned by Supabase\n            enriched_record.update(response.data[0])\n            status_msg = f\"Successfully updated record {target_id} in table '{table_name}'.\"\n        else:\n            status_msg = f\"No record found with ID {target_id} in table '{table_name}'.\"\n            \n    except Exception as e:\n        error_info = str(e)\n        # Capture schema errors without failing the entire step\n        if \"column\" in error_info.lower() or \"PGRST204\" in error_info:\n            status_msg = f\"Warning: Table '{table_name}' is missing columns 'day_in_program' or 'milestone_window'. Processed locally.\"\n        else:\n            status_msg = f\"Warning: Database sync failed ({error_info}). Processed locally.\"\n        \n        # Use stdout for non-fatal warnings to allow workflow to save successfully\n        print(status_msg)\n\n    # 4. Final Output & UI\n    # Store result for persistence and downstream use\n    globals()[output_var_name] = enriched_record\n    \n    # Programmatic output\n    print(json.dumps(enriched_record, indent=2, default=str))\n\n    # Business-friendly HTML summary\n    status_pill = (\n        '<span class=\"ag-badge ag-badge-success\">Sync Successful</span>' \n        if db_success else \n        '<span class=\"ag-badge ag-badge-warning\">Local Calculation</span>'\n    )\n    \n    milestone_pill_variant = \"ag-badge-neutral\" if milestone_window == \"Pre-boarding\" else \"ag-badge-success\"\n\n    display(HTML(f\"\"\"\n        <div class=\"ag-root\">\n            <div class=\"ag-card\">\n                <h2 class=\"ag-h2\">Onboarding Record Processed</h2>\n                <div style=\"margin-bottom: 16px;\">\n                    {status_pill}\n                    <span class=\"ag-muted\" style=\"margin-left: 12px;\">Employee ID: {target_id}</span>\n                </div>\n                \n                <table class=\"ag-table\">\n                    <thead>\n                        <tr>\n                            <th>Processed Metric</th>\n                            <th>Value</th>\n                        </tr>\n                    </thead>\n                    <tbody>\n                        <tr>\n                            <td><span class=\"ag-muted\">Day in Program</span></td>\n                            <td><span class=\"ag-metric\">{day_in_program}</span></td>\n                        </tr>\n                        <tr>\n                            <td><span class=\"ag-muted\">Milestone Window</span></td>\n                            <td><span class=\"ag-badge {milestone_pill_variant}\">{milestone_window}</span></td>\n                        </tr>\n                    </tbody>\n                </table>\n                \n                <div style=\"margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.1); pt-12;\">\n                    <p class=\"ag-body\" style=\"margin-top: 12px;\">\n                        <span class=\"ag-muted\">Status:</span> {status_msg}\n                    </p>\n                </div>\n            </div>\n        </div>\n    \"\"\"))\n\n# Execute step\nawait step_step_2_process_implementation()\n",
+                "next_steps": [
+                  {
+                    "step_id": "step_5_summary"
+                  }
+                ]
+              },
+              {
+                "id": "step_3_workbench",
+                "name": "Workbench Escalation",
+                "description": "Pauses the workflow and requests human review to fix missing or invalid Employee_ID or Hire_Date in the fetched record.",
+                "agent_prompt": "Call create_human_input_form to create an escalation form for the Workbench operator. Display the error message from step_1_validate indicating why validation failed for the fetched record. Add two required fields to the form: 'corrected_Employee_ID' (text) and 'corrected_Hire_Date' (date). Return the form URL.",
+                "services": [
+                  "human_input_form"
+                ],
+                "is_human_input_step": true,
+                "depends_on": [
+                  "step_1_validate"
+                ],
+                "code_cell": "import os\nimport json\nimport asyncio\nimport sys\nfrom datetime import datetime\nfrom dateutil import parser\nfrom supabase import create_async_client\nfrom IPython.display import HTML, display\n\nasync def step_step_4_process_post_workbench_implementation():\n    # 1. Namespaced definitions for safety\n    step_id = \"step_4_process_post_workbench\"\n    \n    # 2. Retrieve inputs from Workbench and initial user inputs\n    workbench_data = user_inputs.get('step_3_workbench', {})\n    target_emp_id = user_inputs.get('target_employee_id')\n    \n    # Check if the record was approved/submitted or rejected\n    if not workbench_data.get('is_approved'):\n        print(\"Workflow terminated: Record rejected in manual review.\", file=sys.stdout)\n        display(HTML(\"\"\"\n            <div class=\"ag-root\">\n                <div class=\"ag-card\">\n                    <h2 class=\"ag-h2\">Review Rejected</h2>\n                    <span class=\"ag-badge ag-badge-error\">Action Cancelled</span>\n                    <p class=\"ag-body\" style=\"margin-top:12px;\">The Workbench operator rejected this record. No updates have been made to the system of record.</p>\n                </div>\n            </div>\n        \"\"\"))\n        return\n\n    corrected_id = workbench_data.get('corrected_Employee_ID')\n    corrected_date_str = workbench_data.get('corrected_Hire_Date')\n\n    # Configuration from environment\n    supabase_url = os.environ.get('SUPABASE_URL')\n    supabase_token = os.environ.get('SUPABASE_TOKEN')\n    table_name = os.environ.get('SUPABASE_TABLE_NAME', 'Workers')\n\n    try:\n        # 3. Data Normalization & Calculation\n        # Parse corrected date\n        dt_hire = parser.parse(str(corrected_date_str))\n        dt_now = datetime.now()\n        \n        # Calculate days in program (today - hire_date)\n        day_in_program = (dt_now - dt_hire).days\n        \n        # Determine closest milestone window (1, 7, 30, 60, 90)\n        milestones = [1, 7, 30, 60, 90]\n        closest_milestone = min(milestones, key=lambda x: abs(x - day_in_program))\n        milestone_label = f\"Day {closest_milestone}\"\n\n        # 4. Supabase Update\n        if not supabase_url or not supabase_token:\n             raise ValueError(\"Supabase credentials missing.\")\n\n        client = await create_async_client(supabase_url, supabase_token)\n        \n        update_payload = {\n            \"Employee_ID\": corrected_id,\n            \"Hire_Date\": dt_hire.isoformat(),\n            \"day_in_program\": day_in_program,\n            \"milestone_window\": milestone_label\n        }\n        \n        # Perform the update where Employee_ID matches the target\n        # Using a try/except for column naming variations (Employee_ID vs employee_id)\n        try:\n            response = await client.table(table_name).update(update_payload).eq(\"Employee_ID\", target_emp_id).execute()\n        except Exception:\n            response = await client.table(table_name).update(update_payload).eq(\"employee_id\", target_emp_id).execute()\n            \n        updated_data = response.data[0] if response.data else {}\n\n        # 5. Store result for persistence\n        globals()[f\"step_{step_id}_updated_record\"] = updated_data\n        \n        # 6. Technical Output (Stdout)\n        print(json.dumps(updated_data, indent=2, default=str))\n\n        # 7. Human-friendly UI Output (Atmospheric Glass)\n        display(HTML(f\"\"\"\n            <div class=\"ag-root\">\n                <div class=\"ag-card\">\n                    <h2 class=\"ag-h2\">System of Record Updated</h2>\n                    <div style=\"margin-bottom: 16px;\">\n                        <span class=\"ag-badge ag-badge-success\">Success</span>\n                        <span class=\"ag-muted\" style=\"margin-left: 8px;\">Record verified and milestones calculated.</span>\n                    </div>\n                    \n                    <table class=\"ag-table\">\n                        <thead>\n                            <tr>\n                                <th>Field</th>\n                                <th>New Value</th>\n                            </tr>\n                        </thead>\n                        <tbody>\n                            <tr>\n                                <td><span class=\"ag-muted\">Corrected ID</span></td>\n                                <td>{corrected_id}</td>\n                            </tr>\n                            <tr>\n                                <td><span class=\"ag-muted\">Day in Program</span></td>\n                                <td><span class=\"ag-metric\">{day_in_program}</span></td>\n                            </tr>\n                            <tr>\n                                <td><span class=\"ag-muted\">Milestone Window</span></td>\n                                <td><span class=\"ag-badge ag-badge-neutral\">{milestone_label}</span></td>\n                            </tr>\n                        </tbody>\n                    </table>\n                    \n                    <p class=\"ag-body\" style=\"margin-top: 16px;\">\n                        The worker record for <strong>{target_emp_id}</strong> has been successfully synchronized with the corrections provided in review.\n                    </p>\n                </div>\n            </div>\n        \"\"\"))\n\n    except Exception as e:\n        print(f\"Error in {step_id}: {str(e)}\", file=sys.stderr)\n        display(HTML(f\"\"\"\n            <div class=\"ag-root\">\n                <div class=\"ag-card\">\n                    <h2 class=\"ag-h2\">Update Failed</h2>\n                    <span class=\"ag-badge ag-badge-error\">Execution Error</span>\n                    <p class=\"ag-body\" style=\"margin-top:12px;\">{str(e)}</p>\n                </div>\n            </div>\n        \"\"\"))\n        raise\n\n# Execute the step implementation\nawait step_step_4_process_post_workbench_implementation()\n",
+                "next_steps": [
+                  {
+                    "step_id": "step_4_process_post_workbench",
+                    "condition": {
+                      "id": "cond_workbench_approved",
+                      "name": "Workbench Approved",
+                      "description": "Proceeds only if the workbench review form was approved/submitted.",
+                      "agent_prompt": "Return True if user_inputs.get('step_3_workbench', {}).get('is_approved') is True, otherwise False.",
+                      "condition_code_cell": ""
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "step_4_process_post_workbench",
+                "name": "Calculate & Update System of Record (Post-Review)",
+                "description": "Calculates the milestones using the manually corrected data (including Pre-boarding for future dates) and updates the Supabase system of record.",
+                "agent_prompt": "Retrieve 'corrected_Employee_ID' and 'corrected_Hire_Date' from user_inputs['step_3_workbench']. Parse 'corrected_Hire_Date' using dateutil.parser. Compute 'day_in_program' (today minus corrected hire date in days. If the hire date is in the future, this should be a negative number). Determine the closest 'milestone_window' from [1, 7, 30, 60, 90] and format as 'Day {X}'. If day_in_program <= 0, set 'milestone_window' to 'Pre-boarding'. Initialize a Supabase client using os.environ.get('SUPABASE_URL') and os.environ.get('SUPABASE_SERVICE_ROLE_KEY'). Update the row in user_inputs['supabase_table_name'] where 'Employee_ID' matches user_inputs['target_employee_id'], setting 'Employee_ID' to the corrected ID, 'Hire_Date' to the corrected date, along with 'day_in_program' and 'milestone_window'. Return the updated record.",
+                "services": [
+                  "supabase",
+                  "python"
+                ],
+                "is_human_input_step": false,
+                "depends_on": [
+                  "step_3_workbench"
+                ],
+                "next_steps": [
+                  {
+                    "step_id": "step_5_summary"
+                  }
+                ]
+              },
+              {
+                "id": "step_5_summary",
+                "name": "Final Success Summary",
+                "description": "Provides a user-friendly final output summarizing the calculated milestones and confirming the process was successful.",
+                "agent_prompt": "Retrieve the updated record from either outputs.get('step_2_process') or outputs.get('step_4_process_post_workbench') depending on which path was executed. Extract 'Employee_ID' (or 'employee_id'), 'day_in_program', and 'milestone_window' from the record. Display the final message in a clear format: \"Success: [Employee_ID]'s 90-day clock has started. Currently on Day [day_in_program] (Milestone: [milestone_window]).\" Return the final summary text.",
+                "services": [
+                  "python",
+                  "output_artifacts"
+                ],
+                "is_human_input_step": false,
+                "depends_on": [
+                  "step_2_process",
+                  "step_4_process_post_workbench"
+                ],
+                "next_steps": []
+              }
+            ],
+            "pip_packages": [
+              "python-dateutil",
+              "supabase",
+              "httpx"
+            ],
+            "integration_overrides": {}
+          }
+        }
+      ]
+    }
+  ],
+  "schedules": [],
+  "integrationsManifest": {
+    "services": [
+      "human_input_form",
+      "output_artifacts",
+      "python",
+      "supabase"
+    ],
+    "envNames": [
+      "SUPABASE_SERVICE_ROLE_KEY",
+      "SUPABASE_TOKEN",
+      "SUPABASE_URL"
+    ]
+  }
+}

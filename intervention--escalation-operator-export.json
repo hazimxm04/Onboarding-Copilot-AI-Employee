@@ -1,0 +1,18 @@
+{
+  "exportFormatVersion": 1,
+  "exportedAt": "2026-07-19T02:38:27.306Z",
+  "rootWorkflowId": "019f7716-f83b-7000-ab78-9fbc35a5f0ec",
+  "versionExportMode": "all",
+  "workflows": [
+    {
+      "sourceWorkflowId": "019f7716-f83b-7000-ab78-9fbc35a5f0ec",
+      "sourceDefaultVersionNumber": 1,
+      "versions": []
+    }
+  ],
+  "schedules": [],
+  "integrationsManifest": {
+    "services": [],
+    "envNames": []
+  }
+}

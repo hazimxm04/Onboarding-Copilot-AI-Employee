@@ -1,0 +1,162 @@
+{
+  "exportFormatVersion": 1,
+  "exportedAt": "2026-07-19T02:38:16.206Z",
+  "rootWorkflowId": "019f741a-322f-7000-b724-beaef25648cd",
+  "versionExportMode": "all",
+  "workflows": [
+    {
+      "sourceWorkflowId": "019f741a-322f-7000-b724-beaef25648cd",
+      "sourceDefaultVersionNumber": 2,
+      "versions": [
+        {
+          "sourceVersionId": "019f7420-4c89-7000-9b53-0c53a0502586",
+          "versionNumber": 1,
+          "commitMessage": null,
+          "definition": {
+            "name": "Pulse & Sentiment Operator",
+            "description": "Assesses employee engagement trends and semantically screens for sensitive disclosures from Peakon survey data while enforcing strict data privacy.",
+            "business_functions": [
+              "Human Resources",
+              "Data Analysis"
+            ],
+            "envs": [],
+            "inputs": [
+              {
+                "name": "employee_id",
+                "description": "The Employee ID to assess.",
+                "type": "text",
+                "label": "Employee ID",
+                "required": true
+              },
+              {
+                "name": "peakon_csv",
+                "description": "CSV file containing the Peakon survey data. Expected columns: Employee_ID, Score, Comment, Submitted_At.",
+                "type": "file",
+                "label": "Peakon Survey Data (CSV)",
+                "required": true,
+                "allowed_extensions": [
+                  ".csv"
+                ]
+              },
+              {
+                "name": "disengaged_threshold",
+                "description": "The score threshold at or below which an employee is considered disengaged.",
+                "type": "number",
+                "label": "Disengaged Threshold",
+                "required": true,
+                "default": "4"
+              }
+            ],
+            "start_at": [
+              "assess_engagement"
+            ],
+            "steps": [
+              {
+                "id": "assess_engagement",
+                "name": "Assess Engagement and Screen Comments",
+                "description": "Reads the Peakon survey data for the given employee and uses AI to assess engagement trends and semantically screen for sensitive disclosures while strictly preserving data privacy.",
+                "agent_prompt": "Read the `peakon_csv` file using pandas and filter for rows where the Employee_ID column matches `employee_id`. Extract the 'Score', 'Comment', and 'Submitted_At' columns, and sort them chronologically if possible. Then, call the `call_ai_llm` function to analyze these records. Define a Pydantic model for the output containing `disengaged` (bool), `disengagement_reason` (str), and `sensitive` (bool). Instruct the AI with these rules: 1. Set `disengaged` to True if the minimum Score is <= `disengaged_threshold`, if there is a clear downward trend in scores over time, or if any `Submitted_At` is missing/blank. 2. Provide an explanation in `disengagement_reason`. 3. Set `sensitive` to True if a comment reveals a personal, health, safety, harassment, discrimination, or welfare matter, or if the employee feels afraid to raise issues. Judge based on semantic meaning, not keyword matching (e.g., 'role not a fit' is normal disengagement, while 'I am dealing with a health matter' is sensitive). 4. STRICT PRIVACY: If `sensitive` is True, do NOT copy or include any part of the sensitive comment text in the output. Ensure the output strictly returns the minimal flag '[Employee_ID] sensitive disclosure - route to HR' (replacing [Employee_ID] with the actual ID). Print the final structured output.",
+                "services": [
+                  "llm",
+                  "csv"
+                ],
+                "depends_on": [],
+                "code_cell": "import pandas as pd\nimport json\nimport re\nfrom pydantic import BaseModel, Field\nfrom IPython.display import HTML, display\nimport datetime\n\n# 1. Setup and Input Retrieval\nstep_assess_engagement_csv_path = user_inputs['peakon_csv']\nstep_assess_engagement_emp_id_input = user_inputs['employee_id']\nstep_assess_engagement_threshold = float(user_inputs['disengaged_threshold'])\n\n# 2. Data Loading and Filtering\nstep_assess_engagement_df = pd.read_csv(step_assess_engagement_csv_path)\n\n# Extract EMP ID if input is composite\nstep_assess_engagement_match = re.search(r'EMP\\d+', step_assess_engagement_emp_id_input)\nstep_assess_engagement_target_id = step_assess_engagement_match.group(0) if step_assess_engagement_match else step_assess_engagement_emp_id_input\n\n# Filter for the employee\nstep_assess_engagement_filtered_df = step_assess_engagement_df[\n    (step_assess_engagement_df['Employee_ID'] == step_assess_engagement_target_id) |\n    (step_assess_engagement_df['Employee_ID'] == step_assess_engagement_emp_id_input)\n].copy()\n\n# Robust date parsing\ndef parse_date(date_str):\n    if not isinstance(date_str, str) or not date_str.strip():\n        return pd.NaT\n    # Try ISO-like\n    try:\n        return pd.to_datetime(date_str, format='%Y-%m-%d %H:%M:%S', errors='raise')\n    except:\n        pass\n    # Try DD/MM/YYYY\n    try:\n        return pd.to_datetime(date_str, dayfirst=True, errors='coerce')\n    except:\n        return pd.NaT\n\nstep_assess_engagement_filtered_df['Submitted_At_DT'] = step_assess_engagement_filtered_df['Submitted_At'].apply(parse_date)\nstep_assess_engagement_filtered_df = step_assess_engagement_filtered_df.sort_values('Submitted_At_DT', na_position='first')\n\n# Extract relevant columns\nstep_assess_engagement_analysis_data = step_assess_engagement_filtered_df[['Score', 'Comment', 'Submitted_At']].to_dict(orient='records')\n\n# 3. AI Analysis\nclass StepAssessEngagementResult(BaseModel):\n    disengaged: bool = Field(description=\"True if the employee is considered disengaged.\")\n    disengagement_reason: str = Field(description=\"Reasoning for the disengagement assessment.\")\n    sensitive: bool = Field(description=\"True if comments contain sensitive disclosures.\")\n\nstep_assess_engagement_ai_response = await call_ai_llm(\n    system_prompt=f\"\"\"You are an HR data analyst. Analyze employee engagement data.\nCurrent Date: {datetime.datetime.now().strftime('%Y-%m-%d')}\nDisengagement Threshold: {step_assess_engagement_threshold}\n\nRules:\n1. Set `disengaged` to True if:\n   - The minimum Score is <= {step_assess_engagement_threshold}.\n   - There is a clear downward trend in scores over time.\n   - Any `Submitted_At` value is missing or blank in the input data.\n2. Provide a clear explanation in `disengagement_reason`.\n3. Set `sensitive` to True if a comment reveals:\n   - Personal health/safety matters.\n   - Harassment or discrimination.\n   - Welfare issues or fear of raising issues.\n   - Judge based on SEMANTIC meaning (e.g., 'workload' is normal, 'fear' or 'safety' is sensitive).\n4. STRICT PRIVACY: If `sensitive` is True, do NOT copy or include any part of the sensitive comment text in your reasoning or output. \n   Instead, if sensitive is true, the `disengagement_reason` or any internal tracking MUST simply flag: '[Employee_ID] sensitive disclosure - route to HR'. Replace [Employee_ID] with {step_assess_engagement_target_id}.\"\"\",\n    user_prompt=f\"Employee ID: {step_assess_engagement_target_id}\\nData:\\n{json.dumps(step_assess_engagement_analysis_data, indent=2)}\",\n    response_schema_pydantic_model=StepAssessEngagementResult,\n    model=\"gemini-3.1-pro-preview\",\n    thinking_level=\"medium\"\n)\n\n# 4. Process Output\nstep_assess_engagement_final_payload = {\n    \"employee_id\": step_assess_engagement_target_id,\n    \"disengaged\": step_assess_engagement_ai_response.disengaged,\n    \"disengagement_reason\": step_assess_engagement_ai_response.disengagement_reason,\n    \"sensitive\": step_assess_engagement_ai_response.sensitive\n}\n\n# 5. Render HTML\nstep_status_color = \"ag-badge-error\" if step_assess_engagement_ai_response.disengaged else \"ag-badge-success\"\nstep_status_text = \"Disengaged\" if step_assess_engagement_ai_response.disengaged else \"Engaged\"\n\nstep_sensitive_color = \"ag-badge-warning\" if step_assess_engagement_ai_response.sensitive else \"ag-badge-neutral\"\nstep_sensitive_text = \"Sensitive Disclosure Detected\" if step_assess_engagement_ai_response.sensitive else \"Standard Disclosure\"\n\nstep_assess_engagement_html = f\"\"\"\n<div class=\"ag-root\">\n    <div class=\"ag-card\">\n        <h2 class=\"ag-h2\">Engagement Assessment: {step_assess_engagement_target_id}</h2>\n        <div style=\"margin-bottom: 16px; display: flex; gap: 8px;\">\n            <span class=\"ag-badge {step_status_color}\">{step_status_text}</span>\n            <span class=\"ag-badge {step_sensitive_color}\">{step_sensitive_text}</span>\n        </div>\n        <h3 class=\"ag-h3\">Assessment Summary</h3>\n        <p class=\"ag-body\">{step_assess_engagement_ai_response.disengagement_reason}</p>\n        \n        <h3 class=\"ag-h3\">Survey History Snapshot</h3>\n        <table class=\"ag-table\">\n            <thead>\n                <tr>\n                    <th>Submitted At</th>\n                    <th>Score</th>\n                </tr>\n            </thead>\n            <tbody>\n                {\"\".join([f\"<tr><td>{row['Submitted_At'] if pd.notna(row['Submitted_At']) else '<span class=\\\"ag-muted\\\">Missing</span>'}</td><td>{row['Score']}</td></tr>\" for row in step_assess_engagement_analysis_data])}\n            </tbody>\n        </table>\n    </div>\n</div>\n\"\"\"\n\ndisplay(HTML(step_assess_engagement_html))\n\n# 6. Final Print Output (JSON)\nprint(json.dumps(step_assess_engagement_final_payload, indent=2))\n",
+                "next_steps": []
+              }
+            ],
+            "pip_packages": [
+              "pandas",
+              "pydantic"
+            ],
+            "integration_overrides": {}
+          }
+        },
+        {
+          "sourceVersionId": "019f7709-f013-7000-ac97-3f25106271c6",
+          "versionNumber": 2,
+          "commitMessage": null,
+          "definition": {
+            "name": "Pulse & Sentiment Operator",
+            "description": "Assesses employee engagement trends and semantically screens for sensitive disclosures from Peakon survey data (now sourced from Supabase) while enforcing strict data privacy.",
+            "business_functions": [
+              "Human Resources",
+              "Data Analysis"
+            ],
+            "envs": [
+              {
+                "name": "SUPABASE_URL",
+                "description": "The base URL for the Supabase project."
+              },
+              {
+                "name": "SUPABASE_TOKEN",
+                "description": "The API key/token for Supabase authentication."
+              }
+            ],
+            "inputs": [
+              {
+                "name": "employee_id",
+                "description": "The Employee ID to assess.",
+                "type": "text",
+                "label": "Employee ID",
+                "required": true
+              },
+              {
+                "name": "disengaged_threshold",
+                "description": "The score threshold at or below which an employee is considered disengaged.",
+                "type": "number",
+                "label": "Disengaged Threshold",
+                "required": true,
+                "default": "4"
+              },
+              {
+                "name": "supabase_table",
+                "description": "The name of the Supabase table containing the Peakon survey data.",
+                "type": "text",
+                "label": "Supabase Table Name",
+                "required": true
+              }
+            ],
+            "start_at": [
+              "assess_engagement"
+            ],
+            "steps": [
+              {
+                "id": "assess_engagement",
+                "name": "Assess Engagement and Screen Comments",
+                "description": "Reads the Peakon survey data from Supabase for the given employee, extracts the minimum pulse score (handling nulls correctly), and uses AI to assess engagement trends and semantically screen for sensitive disclosures while strictly preserving data privacy.",
+                "agent_prompt": "Fetch survey records from the Supabase REST API (using SUPABASE_URL and SUPABASE_TOKEN from environment variables) for the table specified by the `supabase_table` input, filtering where the 'Employee_ID' column equals the `employee_id` input. Extract the 'Score', 'Comment', and 'Submitted_At' fields and sort them chronologically. Compute `min_pulse_score` by finding the minimum numeric value in the 'Score' column across that employee's rows (ignore blank/NaN scores; if the employee has no numeric scores, set `min_pulse_score` to null). Then, call the `call_ai_llm` function to analyze these records. Define a Pydantic model for the AI output containing `disengaged` (bool), `disengagement_reason` (str), and `sensitive` (bool). Instruct the AI with these rules: 1. Set `disengaged` to True if `min_pulse_score` (pass this into the AI prompt context) <= `disengaged_threshold`, if there is a clear downward trend in scores over time, or if any `Submitted_At` is missing/blank. 2. Provide an explanation in `disengagement_reason`. 3. Set `sensitive` to True if a comment reveals a personal, health, safety, harassment, discrimination, or welfare matter, or if the employee feels afraid to raise issues. Judge based on semantic meaning, not keyword matching. 4. STRICT PRIVACY: If `sensitive` is True, do NOT copy or include any part of the sensitive comment text in the output. Keep `disengaged` and `sensitive` as separate booleans. Ensure the output strictly returns the minimal flag '[Employee_ID] sensitive disclosure - route to HR' in the reason if sensitive. Finally, print a JSON dictionary containing 'employee_id', 'disengaged', 'disengagement_reason', 'sensitive', and 'min_pulse_score'.",
+                "services": [
+                  "supabase",
+                  "llm"
+                ],
+                "is_human_input_step": false,
+                "depends_on": [],
+                "code_cell": "import pandas as pd\nimport json\nimport re\nfrom pydantic import BaseModel, Field\nfrom IPython.display import HTML, display\nimport datetime\n\n# 1. Setup and Input Retrieval\nstep_assess_engagement_csv_path = user_inputs['peakon_csv']\nstep_assess_engagement_emp_id_input = user_inputs['employee_id']\nstep_assess_engagement_threshold = float(user_inputs['disengaged_threshold'])\n\n# 2. Data Loading and Filtering\nstep_assess_engagement_df = pd.read_csv(step_assess_engagement_csv_path)\n\n# Extract EMP ID if input is composite\nstep_assess_engagement_match = re.search(r'EMP\\d+', step_assess_engagement_emp_id_input)\nstep_assess_engagement_target_id = step_assess_engagement_match.group(0) if step_assess_engagement_match else step_assess_engagement_emp_id_input\n\n# Filter for the employee\nstep_assess_engagement_filtered_df = step_assess_engagement_df[\n    (step_assess_engagement_df['Employee_ID'] == step_assess_engagement_target_id) |\n    (step_assess_engagement_df['Employee_ID'] == step_assess_engagement_emp_id_input)\n].copy()\n\n# Robust date parsing\ndef parse_date(date_str):\n    if not isinstance(date_str, str) or not date_str.strip():\n        return pd.NaT\n    # Try ISO-like\n    try:\n        return pd.to_datetime(date_str, format='%Y-%m-%d %H:%M:%S', errors='raise')\n    except:\n        pass\n    # Try DD/MM/YYYY\n    try:\n        return pd.to_datetime(date_str, dayfirst=True, errors='coerce')\n    except:\n        return pd.NaT\n\nstep_assess_engagement_filtered_df['Submitted_At_DT'] = step_assess_engagement_filtered_df['Submitted_At'].apply(parse_date)\nstep_assess_engagement_filtered_df = step_assess_engagement_filtered_df.sort_values('Submitted_At_DT', na_position='first')\n\n# Extract relevant columns\nstep_assess_engagement_analysis_data = step_assess_engagement_filtered_df[['Score', 'Comment', 'Submitted_At']].to_dict(orient='records')\n\n# 3. AI Analysis\nclass StepAssessEngagementResult(BaseModel):\n    disengaged: bool = Field(description=\"True if the employee is considered disengaged.\")\n    disengagement_reason: str = Field(description=\"Reasoning for the disengagement assessment.\")\n    sensitive: bool = Field(description=\"True if comments contain sensitive disclosures.\")\n\nstep_assess_engagement_ai_response = await call_ai_llm(\n    system_prompt=f\"\"\"You are an HR data analyst. Analyze employee engagement data.\nCurrent Date: {datetime.datetime.now().strftime('%Y-%m-%d')}\nDisengagement Threshold: {step_assess_engagement_threshold}\n\nRules:\n1. Set `disengaged` to True if:\n   - The minimum Score is <= {step_assess_engagement_threshold}.\n   - There is a clear downward trend in scores over time.\n   - Any `Submitted_At` value is missing or blank in the input data.\n2. Provide a clear explanation in `disengagement_reason`.\n3. Set `sensitive` to True if a comment reveals:\n   - Personal health/safety matters.\n   - Harassment or discrimination.\n   - Welfare issues or fear of raising issues.\n   - Judge based on SEMANTIC meaning (e.g., 'workload' is normal, 'fear' or 'safety' is sensitive).\n4. STRICT PRIVACY: If `sensitive` is True, do NOT copy or include any part of the sensitive comment text in your reasoning or output. \n   Instead, if sensitive is true, the `disengagement_reason` or any internal tracking MUST simply flag: '[Employee_ID] sensitive disclosure - route to HR'. Replace [Employee_ID] with {step_assess_engagement_target_id}.\"\"\",\n    user_prompt=f\"Employee ID: {step_assess_engagement_target_id}\\nData:\\n{json.dumps(step_assess_engagement_analysis_data, indent=2)}\",\n    response_schema_pydantic_model=StepAssessEngagementResult,\n    model=\"gemini-3.1-pro-preview\",\n    thinking_level=\"medium\"\n)\n\n# 4. Process Output\nstep_assess_engagement_final_payload = {\n    \"employee_id\": step_assess_engagement_target_id,\n    \"disengaged\": step_assess_engagement_ai_response.disengaged,\n    \"disengagement_reason\": step_assess_engagement_ai_response.disengagement_reason,\n    \"sensitive\": step_assess_engagement_ai_response.sensitive\n}\n\n# 5. Render HTML\nstep_status_color = \"ag-badge-error\" if step_assess_engagement_ai_response.disengaged else \"ag-badge-success\"\nstep_status_text = \"Disengaged\" if step_assess_engagement_ai_response.disengaged else \"Engaged\"\n\nstep_sensitive_color = \"ag-badge-warning\" if step_assess_engagement_ai_response.sensitive else \"ag-badge-neutral\"\nstep_sensitive_text = \"Sensitive Disclosure Detected\" if step_assess_engagement_ai_response.sensitive else \"Standard Disclosure\"\n\nstep_assess_engagement_html = f\"\"\"\n<div class=\"ag-root\">\n    <div class=\"ag-card\">\n        <h2 class=\"ag-h2\">Engagement Assessment: {step_assess_engagement_target_id}</h2>\n        <div style=\"margin-bottom: 16px; display: flex; gap: 8px;\">\n            <span class=\"ag-badge {step_status_color}\">{step_status_text}</span>\n            <span class=\"ag-badge {step_sensitive_color}\">{step_sensitive_text}</span>\n        </div>\n        <h3 class=\"ag-h3\">Assessment Summary</h3>\n        <p class=\"ag-body\">{step_assess_engagement_ai_response.disengagement_reason}</p>\n        \n        <h3 class=\"ag-h3\">Survey History Snapshot</h3>\n        <table class=\"ag-table\">\n            <thead>\n                <tr>\n                    <th>Submitted At</th>\n                    <th>Score</th>\n                </tr>\n            </thead>\n            <tbody>\n                {\"\".join([f\"<tr><td>{row['Submitted_At'] if pd.notna(row['Submitted_At']) else '<span class=\\\"ag-muted\\\">Missing</span>'}</td><td>{row['Score']}</td></tr>\" for row in step_assess_engagement_analysis_data])}\n            </tbody>\n        </table>\n    </div>\n</div>\n\"\"\"\n\ndisplay(HTML(step_assess_engagement_html))\n\n# 6. Final Print Output (JSON)\nprint(json.dumps(step_assess_engagement_final_payload, indent=2))\n",
+                "next_steps": []
+              }
+            ],
+            "pip_packages": [
+              "pandas",
+              "pydantic",
+              "requests"
+            ],
+            "integration_overrides": {}
+          }
+        }
+      ]
+    }
+  ],
+  "schedules": [],
+  "integrationsManifest": {
+    "services": [
+      "csv",
+      "llm",
+      "supabase"
+    ],
+    "envNames": [
+      "SUPABASE_TOKEN",
+      "SUPABASE_URL"
+    ]
+  }
+}

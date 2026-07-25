@@ -1,0 +1,495 @@
+{
+  "exportFormatVersion": 1,
+  "exportedAt": "2026-07-19T02:38:19.777Z",
+  "rootWorkflowId": "019f7426-7f49-7000-9fd4-d9fabed19b22",
+  "versionExportMode": "all",
+  "workflows": [
+    {
+      "sourceWorkflowId": "019f7426-7f49-7000-9fd4-d9fabed19b22",
+      "sourceDefaultVersionNumber": 3,
+      "versions": [
+        {
+          "sourceVersionId": "019f743a-720d-7000-9c71-c65567524bd9",
+          "versionNumber": 1,
+          "commitMessage": null,
+          "definition": {
+            "name": "Risk Scoring Operator",
+            "description": "Evaluates program signals against configurable thresholds to determine if a participant or resource is On Track, At Risk, or Needs Human Review.",
+            "business_functions": [
+              "Risk Management",
+              "Compliance",
+              "Operations"
+            ],
+            "envs": [
+              {
+                "name": "AT_RISK_PULSE_FLOOR",
+                "description": "Minimum pulse score to be considered at risk. Default: 3"
+              },
+              {
+                "name": "STALLED_COUNT_THRESHOLD",
+                "description": "Threshold for number of stalled items to be considered a medium signal. Default: 3"
+              },
+              {
+                "name": "MID_LOW_PULSE_MIN",
+                "description": "Minimum pulse score for the mid-low medium signal range. Default: 4"
+              },
+              {
+                "name": "MID_LOW_PULSE_MAX",
+                "description": "Maximum pulse score for the mid-low medium signal range. Default: 5"
+              }
+            ],
+            "inputs": [
+              {
+                "name": "access_gap",
+                "description": "Is there a critical access gap?",
+                "type": "checkbox",
+                "label": "Critical Access Gap",
+                "required": true
+              },
+              {
+                "name": "compliance_stalled",
+                "description": "Is a compliance document stalled past its milestone?",
+                "type": "checkbox",
+                "label": "Compliance Stalled",
+                "required": true
+              },
+              {
+                "name": "stalled_count",
+                "description": "The number of stalled items or processes.",
+                "type": "number",
+                "label": "Stalled Count",
+                "required": true
+              },
+              {
+                "name": "pulse_score",
+                "description": "The current pulse score (e.g., 1-10).",
+                "type": "number",
+                "label": "Pulse Score",
+                "required": false
+              },
+              {
+                "name": "disengaged_status",
+                "description": "Is the participant currently disengaged or unresponsive?",
+                "type": "checkbox",
+                "label": "Disengaged Status",
+                "required": true
+              },
+              {
+                "name": "day_in_program",
+                "description": "Number of days the participant has been in the program.",
+                "type": "number",
+                "label": "Day in Program",
+                "required": true
+              },
+              {
+                "name": "resource_status",
+                "description": "Current status of the day-one resource.",
+                "type": "select",
+                "label": "Resource Status",
+                "required": true,
+                "options": [
+                  "Requested",
+                  "Provisioned",
+                  "Not Required"
+                ]
+              }
+            ],
+            "start_at": [
+              "eval_risk"
+            ],
+            "steps": [
+              {
+                "id": "eval_risk",
+                "name": "Evaluate Risk Signals",
+                "description": "Analyzes input signals and configurable thresholds to compute the initial risk level.",
+                "agent_prompt": "Read program signals from user_inputs: access_gap, compliance_stalled, stalled_count, pulse_score, disengaged_status, day_in_program, resource_status. Read thresholds from environment variables (with defaults): AT_RISK_PULSE_FLOOR (3), STALLED_COUNT_THRESHOLD (3), MID_LOW_PULSE_MIN (4), MID_LOW_PULSE_MAX (5). Logic: Check if any required input (like pulse_score) is missing or None; if so, set risk_level='Needs Human Review', reasons=['Incomplete data'], and recommended_action='Escalate'. If data is complete, determine if AT RISK: (1) access_gap is True, (2) pulse_score <= AT_RISK_PULSE_FLOOR, (3) compliance_stalled is True. Check medium signals: (a) stalled_count >= STALLED_COUNT_THRESHOLD, (b) MID_LOW_PULSE_MIN <= pulse_score <= MID_LOW_PULSE_MAX, (c) disengaged_status is True, (d) day_in_program == 1 and resource_status == 'Requested'. If 2 or more medium signals are true, mark as AT RISK. If AT RISK, set risk_level='At Risk', populate reasons list with triggered rules, and set recommended_action='Intervene'. Otherwise, set risk_level='On Track', reasons=['No risk signals met'], and recommended_action='Continue monitoring'. Save risk_level, reasons, and recommended_action to local variables for downstream steps.",
+                "services": [],
+                "is_human_input_step": false,
+                "depends_on": [],
+                "code_cell": "import os\nimport json\nfrom IPython.display import HTML, display\n\nasync def run_step_eval_risk():\n    # 1. Retrieve Inputs\n    # Note: user_inputs is a globally available dictionary\n    access_gap = user_inputs.get('access_gap')\n    compliance_stalled = user_inputs.get('compliance_stalled')\n    stalled_count = user_inputs.get('stalled_count')\n    pulse_score = user_inputs.get('pulse_score')\n    disengaged_status = user_inputs.get('disengaged_status')\n    day_in_program = user_inputs.get('day_in_program')\n    resource_status = user_inputs.get('resource_status')\n\n    # 2. Retrieve Thresholds from Environment Variables\n    at_risk_pulse_floor = int(os.environ.get('AT_RISK_PULSE_FLOOR', 3))\n    stalled_count_threshold = int(os.environ.get('STALLED_COUNT_THRESHOLD', 3))\n    mid_low_pulse_min = int(os.environ.get('MID_LOW_PULSE_MIN', 4))\n    mid_low_pulse_max = int(os.environ.get('MID_LOW_PULSE_MAX', 5))\n\n    # 3. Initialize Risk Variables\n    step_eval_risk_risk_level = \"\"\n    step_eval_risk_reasons = []\n    step_eval_risk_recommended_action = \"\"\n\n    # 4. Check for Data Completeness\n    # The prompt highlights pulse_score as a key check, but mentions \"any required input\".\n    # Based on the input schema, most are required except pulse_score (which logic depends on).\n    required_inputs = {\n        \"Critical Access Gap\": access_gap,\n        \"Compliance Stalled\": compliance_stalled,\n        \"Stalled Count\": stalled_count,\n        \"Pulse Score\": pulse_score,\n        \"Disengaged Status\": disengaged_status,\n        \"Day in Program\": day_in_program,\n        \"Resource Status\": resource_status\n    }\n\n    missing_fields = [k for k, v in required_inputs.items() if v is None]\n\n    if missing_fields:\n        step_eval_risk_risk_level = 'Needs Human Review'\n        step_eval_risk_reasons = ['Incomplete data']\n        step_eval_risk_recommended_action = 'Escalate'\n    else:\n        # 5. Determine if AT RISK\n        is_at_risk = False\n        triggered_rules = []\n\n        # High Signals\n        if access_gap is True:\n            is_at_risk = True\n            triggered_rules.append(\"Critical access gap detected.\")\n        \n        if pulse_score <= at_risk_pulse_floor:\n            is_at_risk = True\n            triggered_rules.append(f\"Pulse score ({pulse_score}) is at or below the floor threshold ({at_risk_pulse_floor}).\")\n\n        if compliance_stalled is True:\n            is_at_risk = True\n            triggered_rules.append(\"Compliance document is stalled past milestone.\")\n\n        # Medium Signals\n        medium_signals_count = 0\n        medium_reasons = []\n\n        if stalled_count >= stalled_count_threshold:\n            medium_signals_count += 1\n            medium_reasons.append(f\"Stalled count ({stalled_count}) meets or exceeds threshold ({stalled_count_threshold}).\")\n\n        if mid_low_pulse_min <= pulse_score <= mid_low_pulse_max:\n            medium_signals_count += 1\n            medium_reasons.append(f\"Pulse score ({pulse_score}) is within the mid-low range ({mid_low_pulse_min}-{mid_low_pulse_max}).\")\n\n        if disengaged_status is True:\n            medium_signals_count += 1\n            medium_reasons.append(\"Participant is currently disengaged or unresponsive.\")\n\n        if day_in_program == 1 and resource_status == 'Requested':\n            medium_signals_count += 1\n            medium_reasons.append(\"Day-one resource is still in 'Requested' status.\")\n\n        # If 2 or more medium signals are true, mark as AT RISK\n        if medium_signals_count >= 2:\n            is_at_risk = True\n            triggered_rules.extend(medium_reasons)\n\n        # 6. Final Decision Logic\n        if is_at_risk:\n            step_eval_risk_risk_level = 'At Risk'\n            step_eval_risk_reasons = triggered_rules\n            step_eval_risk_recommended_action = 'Intervene'\n        else:\n            step_eval_risk_risk_level = 'On Track'\n            step_eval_risk_reasons = ['No risk signals met']\n            step_eval_risk_recommended_action = 'Continue monitoring'\n\n    # 7. Persist variables for downstream steps\n    globals()['step_eval_risk_risk_level'] = step_eval_risk_risk_level\n    globals()['step_eval_risk_reasons'] = step_eval_risk_reasons\n    globals()['step_eval_risk_recommended_action'] = step_eval_risk_recommended_action\n\n    # 8. Output HTML Summary\n    badge_class = \"ag-badge-neutral\"\n    if step_eval_risk_risk_level == \"At Risk\":\n        badge_class = \"ag-badge-error\"\n    elif step_eval_risk_risk_level == \"On Track\":\n        badge_class = \"ag-badge-success\"\n    elif step_eval_risk_risk_level == \"Needs Human Review\":\n        badge_class = \"ag-badge-warning\"\n\n    reasons_html = \"\".join([f\"<li>{r}</li>\" for r in step_eval_risk_reasons])\n    \n    html_output = f\"\"\"\n    <div class=\"ag-root\">\n        <div class=\"ag-card\">\n            <h2 class=\"ag-h2\">Risk Assessment Result</h2>\n            <p class=\"ag-body\">Evaluated program signals against configured thresholds.</p>\n            \n            <div style=\"margin-bottom: 16px;\">\n                <span class=\"ag-muted\">Risk Level:</span>\n                <span class=\"ag-badge {badge_class}\">{step_eval_risk_risk_level}</span>\n            </div>\n            \n            <div style=\"margin-bottom: 16px;\">\n                <span class=\"ag-muted\">Recommended Action:</span>\n                <p class=\"ag-body\"><strong>{step_eval_risk_recommended_action}</strong></p>\n            </div>\n\n            <h3 class=\"ag-h3\">Reasons / Triggered Signals</h3>\n            <ul class=\"ag-body\">\n                {reasons_html}\n            </ul>\n        </div>\n    </div>\n    \"\"\"\n    display(HTML(html_output))\n\n    # 9. Output JSON stdout\n    result_payload = {\n        \"risk_level\": step_eval_risk_risk_level,\n        \"reasons\": step_eval_risk_reasons,\n        \"recommended_action\": step_eval_risk_recommended_action,\n        \"inputs_processed\": {\n            \"access_gap\": access_gap,\n            \"compliance_stalled\": compliance_stalled,\n            \"stalled_count\": stalled_count,\n            \"pulse_score\": pulse_score,\n            \"disengaged_status\": disengaged_status,\n            \"day_in_program\": day_in_program,\n            \"resource_status\": resource_status\n        }\n    }\n    print(json.dumps(result_payload, indent=2))\n\nawait run_step_eval_risk()\n",
+                "next_steps": [
+                  {
+                    "step_id": "escalate_review",
+                    "condition": {
+                      "id": "needs_human_review_cond",
+                      "name": "Needs Human Review",
+                      "description": "Check if the decision requires human escalation.",
+                      "agent_prompt": "Return True if the calculated risk_level from the previous step is 'Needs Human Review', otherwise False.",
+                      "condition_code_cell": "# Implementation for condition: needs_human_review_cond\n# This condition checks if the risk level calculated in the 'eval_risk' step is 'Needs Human Review'\n\ncond_needs_human_review_cond_risk_level = globals().get('step_eval_risk_risk_level')\ncond_needs_human_review_cond_result = cond_needs_human_review_cond_risk_level == 'Needs Human Review'\n\nprint(cond_needs_human_review_cond_result)"
+                    }
+                  },
+                  {
+                    "step_id": "save_report",
+                    "condition": {
+                      "id": "automated_decision_cond",
+                      "name": "Automated Decision",
+                      "description": "Check if the decision was automated successfully.",
+                      "agent_prompt": "Return True if the calculated risk_level from the previous step is NOT 'Needs Human Review', otherwise False.",
+                      "condition_code_cell": "# Condition: Automated Decision\n# Logic: Return True if the risk_level is NOT 'Needs Human Review'\n\n# Retrieve the risk level calculated in the 'eval_risk' step\ncond_automated_decision_cond_risk_level = globals().get('step_eval_risk_risk_level')\n\n# The condition is met if the risk level is anything other than 'Needs Human Review'\n# (e.g., 'At Risk' or 'On Track')\nprint(cond_automated_decision_cond_risk_level != 'Needs Human Review')\n"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "escalate_review",
+                "name": "Escalate for Human Review",
+                "description": "Prompts a human reviewer to manually determine the risk level when data is incomplete or signals conflict.",
+                "agent_prompt": "Use create_human_input_form to generate a review form. The form should display the reasons for escalation (e.g. 'Incomplete data') and the originally provided inputs. Include a dropdown field named 'final_risk_level' with options ['On Track', 'At Risk'] and a text field named 'final_action' for the reviewer to manually determine the outcome.",
+                "services": [
+                  "human_input_form"
+                ],
+                "is_human_input_step": true,
+                "depends_on": [
+                  "eval_risk"
+                ],
+                "next_steps": []
+              },
+              {
+                "id": "save_report",
+                "name": "Save Automated Report",
+                "description": "Saves the automated risk decision and reasons into a report artifact.",
+                "agent_prompt": "Format the automated decision (risk_level, reasons, and recommended_action) into a clear, readable markdown text. Save this text into an output artifact named 'risk_decision_report.md' so it can be downloaded or reviewed by the user.",
+                "services": [
+                  "output_artifacts"
+                ],
+                "is_human_input_step": false,
+                "depends_on": [
+                  "eval_risk"
+                ],
+                "code_cell": "import os\nimport json\nfrom IPython.display import HTML, display\n\nasync def step_save_report_implementation():\n    # 1. Retrieve data from previous step\n    step_save_report_risk_level = globals().get('step_eval_risk_risk_level', 'Unknown')\n    step_save_report_reasons = globals().get('step_eval_risk_reasons', [])\n    step_save_report_recommended_action = globals().get('step_eval_risk_recommended_action', 'None')\n\n    # 2. Format as Markdown\n    step_save_report_md_lines = [\n        \"# Risk Decision Report\",\n        f\"**Risk Level:** {step_save_report_risk_level}\",\n        f\"**Recommended Action:** {step_save_report_recommended_action}\",\n        \"\",\n        \"## Reasons / Triggered Signals\"\n    ]\n    \n    if not step_save_report_reasons:\n        step_save_report_md_lines.append(\"- No specific reasons provided.\")\n    else:\n        for reason in step_save_report_reasons:\n            step_save_report_md_lines.append(f\"- {reason}\")\n\n    step_save_report_markdown_content = \"\\n\".join(step_save_report_md_lines)\n\n    # 3. Save to a local file\n    step_save_report_file_path = \"risk_decision_report.md\"\n    with open(step_save_report_file_path, \"w\") as f:\n        f.write(step_save_report_markdown_content)\n\n    # 4. Upload the artifact\n    step_save_report_artifact_url = await upload_output_file(step_save_report_file_path)\n\n    # 5. Render HTML Summary (Atmospheric Glass)\n    step_save_report_badge_map = {\n        \"At Risk\": \"ag-badge-error\",\n        \"On Track\": \"ag-badge-success\",\n        \"Needs Human Review\": \"ag-badge-warning\"\n    }\n    step_save_report_badge_class = step_save_report_badge_map.get(step_save_report_risk_level, \"ag-badge-neutral\")\n\n    step_save_report_html = f\"\"\"\n<div class=\"ag-root\">\n    <div class=\"ag-card\">\n        <h2 class=\"ag-h2\">Report Generated</h2>\n        <p class=\"ag-body\">The automated risk decision report has been successfully generated and saved.</p>\n        \n        <div style=\"margin-bottom: 12px;\">\n            <span class=\"ag-muted\">Risk Level:</span>\n            <span class=\"ag-badge {step_save_report_badge_class}\">{step_save_report_risk_level}</span>\n        </div>\n\n        <p class=\"ag-body\">\n            <a class=\"ag-link\" href=\"{step_save_report_artifact_url}\" target=\"_blank\">Download risk_decision_report.md</a>\n        </p>\n    </div>\n</div>\n\"\"\"\n    display(HTML(step_save_report_html))\n\n    # 6. Output JSON to stdout\n    step_save_report_result = {\n        \"status\": \"success\",\n        \"artifact_name\": \"risk_decision_report.md\",\n        \"artifact_url\": step_save_report_artifact_url,\n        \"risk_level\": step_save_report_risk_level,\n        \"recommended_action\": step_save_report_recommended_action\n    }\n    print(json.dumps(step_save_report_result, indent=2))\n\nawait step_save_report_implementation()\n",
+                "next_steps": []
+              }
+            ],
+            "pip_packages": [],
+            "integration_overrides": {}
+          }
+        },
+        {
+          "sourceVersionId": "019f76f4-ce53-7000-94c4-48aec90e0ebb",
+          "versionNumber": 2,
+          "commitMessage": null,
+          "definition": {
+            "name": "Risk Scoring Operator",
+            "description": "Evaluates program signals against configurable thresholds to determine if a participant or resource is On Track, At Risk, or Needs Human Review.",
+            "business_functions": [
+              "Risk Management",
+              "Compliance",
+              "Operations"
+            ],
+            "envs": [
+              {
+                "name": "AT_RISK_PULSE_FLOOR",
+                "description": "Minimum pulse score to be considered at risk. Default: 3"
+              },
+              {
+                "name": "STALLED_COUNT_THRESHOLD",
+                "description": "Threshold for number of stalled items to be considered a medium signal. Default: 3"
+              },
+              {
+                "name": "MID_LOW_PULSE_MIN",
+                "description": "Minimum pulse score for the mid-low medium signal range. Default: 4"
+              },
+              {
+                "name": "MID_LOW_PULSE_MAX",
+                "description": "Maximum pulse score for the mid-low medium signal range. Default: 5"
+              }
+            ],
+            "inputs": [
+              {
+                "name": "critical_gap",
+                "description": "Is there a critical access gap?",
+                "type": "checkbox",
+                "label": "Critical Gap",
+                "required": true
+              },
+              {
+                "name": "compliance_stalled",
+                "description": "Is a compliance document stalled past its milestone?",
+                "type": "checkbox",
+                "label": "Compliance Stalled",
+                "required": true
+              },
+              {
+                "name": "stalled_count",
+                "description": "The number of stalled items or processes.",
+                "type": "number",
+                "label": "Stalled Count",
+                "required": true
+              },
+              {
+                "name": "min_pulse_score",
+                "description": "The current minimum pulse score (e.g., 1-10). Optional.",
+                "type": "number",
+                "label": "Minimum Pulse Score",
+                "required": false
+              },
+              {
+                "name": "disengaged_status",
+                "description": "Is the participant currently disengaged or unresponsive?",
+                "type": "checkbox",
+                "label": "Disengaged Status",
+                "required": true
+              },
+              {
+                "name": "day_in_program",
+                "description": "Number of days the participant has been in the program.",
+                "type": "number",
+                "label": "Day in Program",
+                "required": true
+              },
+              {
+                "name": "resource_status",
+                "description": "Current status of the day-one resource.",
+                "type": "select",
+                "label": "Resource Status",
+                "required": true,
+                "options": [
+                  "Blocked",
+                  "Requested",
+                  "Fulfilled"
+                ]
+              }
+            ],
+            "start_at": [
+              "eval_risk"
+            ],
+            "steps": [
+              {
+                "id": "eval_risk",
+                "name": "Evaluate Risk Signals",
+                "description": "Analyzes input signals and configurable thresholds to compute the initial risk level.",
+                "agent_prompt": "Read program signals from user_inputs: critical_gap, compliance_stalled, stalled_count, min_pulse_score, disengaged_status, day_in_program, resource_status. Read thresholds from environment variables (with defaults): AT_RISK_PULSE_FLOOR (3), STALLED_COUNT_THRESHOLD (3), MID_LOW_PULSE_MIN (4), MID_LOW_PULSE_MAX (5). Logic: Check if any required input (critical_gap, compliance_stalled, stalled_count, disengaged_status, day_in_program, resource_status) is missing or None; if so, set risk_level='Needs Human Review', reasons=['Incomplete data'], and recommended_action='Escalate'. Note: min_pulse_score is optional and should NOT trigger escalation if missing. If data is complete, determine if AT RISK: (1) critical_gap is True, (2) min_pulse_score is provided and <= AT_RISK_PULSE_FLOOR, (3) compliance_stalled is True. Check medium signals: (a) stalled_count >= STALLED_COUNT_THRESHOLD, (b) min_pulse_score is provided and MID_LOW_PULSE_MIN <= min_pulse_score <= MID_LOW_PULSE_MAX, (c) disengaged_status is True, (d) day_in_program == 1 and resource_status in ['Requested', 'Blocked']. If 2 or more medium signals are true, mark as AT RISK. If AT RISK, set risk_level='At Risk', populate reasons list with triggered rules, and set recommended_action='Intervene'. Otherwise, set risk_level='On Track', reasons=['No risk signals met'], and recommended_action='Continue monitoring'. Save risk_level, reasons, and recommended_action to local variables for downstream steps.",
+                "services": [],
+                "is_human_input_step": false,
+                "depends_on": [],
+                "code_cell": "import os\nimport json\nfrom IPython.display import HTML, display\n\nasync def run_step_eval_risk():\n    # 1. Retrieve Inputs\n    # Note: user_inputs is a globally available dictionary\n    access_gap = user_inputs.get('access_gap')\n    compliance_stalled = user_inputs.get('compliance_stalled')\n    stalled_count = user_inputs.get('stalled_count')\n    pulse_score = user_inputs.get('pulse_score')\n    disengaged_status = user_inputs.get('disengaged_status')\n    day_in_program = user_inputs.get('day_in_program')\n    resource_status = user_inputs.get('resource_status')\n\n    # 2. Retrieve Thresholds from Environment Variables\n    at_risk_pulse_floor = int(os.environ.get('AT_RISK_PULSE_FLOOR', 3))\n    stalled_count_threshold = int(os.environ.get('STALLED_COUNT_THRESHOLD', 3))\n    mid_low_pulse_min = int(os.environ.get('MID_LOW_PULSE_MIN', 4))\n    mid_low_pulse_max = int(os.environ.get('MID_LOW_PULSE_MAX', 5))\n\n    # 3. Initialize Risk Variables\n    step_eval_risk_risk_level = \"\"\n    step_eval_risk_reasons = []\n    step_eval_risk_recommended_action = \"\"\n\n    # 4. Check for Data Completeness\n    # The prompt highlights pulse_score as a key check, but mentions \"any required input\".\n    # Based on the input schema, most are required except pulse_score (which logic depends on).\n    required_inputs = {\n        \"Critical Access Gap\": access_gap,\n        \"Compliance Stalled\": compliance_stalled,\n        \"Stalled Count\": stalled_count,\n        \"Pulse Score\": pulse_score,\n        \"Disengaged Status\": disengaged_status,\n        \"Day in Program\": day_in_program,\n        \"Resource Status\": resource_status\n    }\n\n    missing_fields = [k for k, v in required_inputs.items() if v is None]\n\n    if missing_fields:\n        step_eval_risk_risk_level = 'Needs Human Review'\n        step_eval_risk_reasons = ['Incomplete data']\n        step_eval_risk_recommended_action = 'Escalate'\n    else:\n        # 5. Determine if AT RISK\n        is_at_risk = False\n        triggered_rules = []\n\n        # High Signals\n        if access_gap is True:\n            is_at_risk = True\n            triggered_rules.append(\"Critical access gap detected.\")\n        \n        if pulse_score <= at_risk_pulse_floor:\n            is_at_risk = True\n            triggered_rules.append(f\"Pulse score ({pulse_score}) is at or below the floor threshold ({at_risk_pulse_floor}).\")\n\n        if compliance_stalled is True:\n            is_at_risk = True\n            triggered_rules.append(\"Compliance document is stalled past milestone.\")\n\n        # Medium Signals\n        medium_signals_count = 0\n        medium_reasons = []\n\n        if stalled_count >= stalled_count_threshold:\n            medium_signals_count += 1\n            medium_reasons.append(f\"Stalled count ({stalled_count}) meets or exceeds threshold ({stalled_count_threshold}).\")\n\n        if mid_low_pulse_min <= pulse_score <= mid_low_pulse_max:\n            medium_signals_count += 1\n            medium_reasons.append(f\"Pulse score ({pulse_score}) is within the mid-low range ({mid_low_pulse_min}-{mid_low_pulse_max}).\")\n\n        if disengaged_status is True:\n            medium_signals_count += 1\n            medium_reasons.append(\"Participant is currently disengaged or unresponsive.\")\n\n        if day_in_program == 1 and resource_status == 'Requested':\n            medium_signals_count += 1\n            medium_reasons.append(\"Day-one resource is still in 'Requested' status.\")\n\n        # If 2 or more medium signals are true, mark as AT RISK\n        if medium_signals_count >= 2:\n            is_at_risk = True\n            triggered_rules.extend(medium_reasons)\n\n        # 6. Final Decision Logic\n        if is_at_risk:\n            step_eval_risk_risk_level = 'At Risk'\n            step_eval_risk_reasons = triggered_rules\n            step_eval_risk_recommended_action = 'Intervene'\n        else:\n            step_eval_risk_risk_level = 'On Track'\n            step_eval_risk_reasons = ['No risk signals met']\n            step_eval_risk_recommended_action = 'Continue monitoring'\n\n    # 7. Persist variables for downstream steps\n    globals()['step_eval_risk_risk_level'] = step_eval_risk_risk_level\n    globals()['step_eval_risk_reasons'] = step_eval_risk_reasons\n    globals()['step_eval_risk_recommended_action'] = step_eval_risk_recommended_action\n\n    # 8. Output HTML Summary\n    badge_class = \"ag-badge-neutral\"\n    if step_eval_risk_risk_level == \"At Risk\":\n        badge_class = \"ag-badge-error\"\n    elif step_eval_risk_risk_level == \"On Track\":\n        badge_class = \"ag-badge-success\"\n    elif step_eval_risk_risk_level == \"Needs Human Review\":\n        badge_class = \"ag-badge-warning\"\n\n    reasons_html = \"\".join([f\"<li>{r}</li>\" for r in step_eval_risk_reasons])\n    \n    html_output = f\"\"\"\n    <div class=\"ag-root\">\n        <div class=\"ag-card\">\n            <h2 class=\"ag-h2\">Risk Assessment Result</h2>\n            <p class=\"ag-body\">Evaluated program signals against configured thresholds.</p>\n            \n            <div style=\"margin-bottom: 16px;\">\n                <span class=\"ag-muted\">Risk Level:</span>\n                <span class=\"ag-badge {badge_class}\">{step_eval_risk_risk_level}</span>\n            </div>\n            \n            <div style=\"margin-bottom: 16px;\">\n                <span class=\"ag-muted\">Recommended Action:</span>\n                <p class=\"ag-body\"><strong>{step_eval_risk_recommended_action}</strong></p>\n            </div>\n\n            <h3 class=\"ag-h3\">Reasons / Triggered Signals</h3>\n            <ul class=\"ag-body\">\n                {reasons_html}\n            </ul>\n        </div>\n    </div>\n    \"\"\"\n    display(HTML(html_output))\n\n    # 9. Output JSON stdout\n    result_payload = {\n        \"risk_level\": step_eval_risk_risk_level,\n        \"reasons\": step_eval_risk_reasons,\n        \"recommended_action\": step_eval_risk_recommended_action,\n        \"inputs_processed\": {\n            \"access_gap\": access_gap,\n            \"compliance_stalled\": compliance_stalled,\n            \"stalled_count\": stalled_count,\n            \"pulse_score\": pulse_score,\n            \"disengaged_status\": disengaged_status,\n            \"day_in_program\": day_in_program,\n            \"resource_status\": resource_status\n        }\n    }\n    print(json.dumps(result_payload, indent=2))\n\nawait run_step_eval_risk()\n",
+                "next_steps": [
+                  {
+                    "step_id": "escalate_review",
+                    "condition": {
+                      "id": "needs_human_review_cond",
+                      "name": "Needs Human Review",
+                      "description": "Check if the decision requires human escalation.",
+                      "agent_prompt": "Return True if the calculated risk_level from the previous step is 'Needs Human Review', otherwise False.",
+                      "condition_code_cell": "# Implementation for condition: needs_human_review_cond\n# This condition checks if the risk level calculated in the 'eval_risk' step is 'Needs Human Review'\n\ncond_needs_human_review_cond_risk_level = globals().get('step_eval_risk_risk_level')\ncond_needs_human_review_cond_result = cond_needs_human_review_cond_risk_level == 'Needs Human Review'\n\nprint(cond_needs_human_review_cond_result)"
+                    }
+                  },
+                  {
+                    "step_id": "save_report",
+                    "condition": {
+                      "id": "automated_decision_cond",
+                      "name": "Automated Decision",
+                      "description": "Check if the decision was automated successfully.",
+                      "agent_prompt": "Return True if the calculated risk_level from the previous step is NOT 'Needs Human Review', otherwise False.",
+                      "condition_code_cell": "# Condition: Automated Decision\n# Logic: Return True if the risk_level is NOT 'Needs Human Review'\n\n# Retrieve the risk level calculated in the 'eval_risk' step\ncond_automated_decision_cond_risk_level = globals().get('step_eval_risk_risk_level')\n\n# The condition is met if the risk level is anything other than 'Needs Human Review'\n# (e.g., 'At Risk' or 'On Track')\nprint(cond_automated_decision_cond_risk_level != 'Needs Human Review')\n"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "escalate_review",
+                "name": "Escalate for Human Review",
+                "description": "Prompts a human reviewer to manually determine the risk level when data is incomplete or signals conflict.",
+                "agent_prompt": "Use create_human_input_form to generate a review form. The form should display the reasons for escalation (e.g. 'Incomplete data') and the originally provided inputs. Include a dropdown field named 'final_risk_level' with options ['On Track', 'At Risk'] and a text field named 'final_action' for the reviewer to manually determine the outcome.",
+                "services": [
+                  "human_input_form"
+                ],
+                "is_human_input_step": true,
+                "depends_on": [
+                  "eval_risk"
+                ],
+                "next_steps": []
+              },
+              {
+                "id": "save_report",
+                "name": "Save Automated Report",
+                "description": "Saves the automated risk decision and reasons into a report artifact.",
+                "agent_prompt": "Format the automated decision (risk_level, reasons, and recommended_action) into a clear, readable markdown text. Save this text into an output artifact named 'risk_decision_report.md' so it can be downloaded or reviewed by the user.",
+                "services": [
+                  "output_artifacts"
+                ],
+                "is_human_input_step": false,
+                "depends_on": [
+                  "eval_risk"
+                ],
+                "code_cell": "import os\nimport json\nfrom IPython.display import HTML, display\n\nasync def step_save_report_implementation():\n    # 1. Retrieve data from previous step\n    step_save_report_risk_level = globals().get('step_eval_risk_risk_level', 'Unknown')\n    step_save_report_reasons = globals().get('step_eval_risk_reasons', [])\n    step_save_report_recommended_action = globals().get('step_eval_risk_recommended_action', 'None')\n\n    # 2. Format as Markdown\n    step_save_report_md_lines = [\n        \"# Risk Decision Report\",\n        f\"**Risk Level:** {step_save_report_risk_level}\",\n        f\"**Recommended Action:** {step_save_report_recommended_action}\",\n        \"\",\n        \"## Reasons / Triggered Signals\"\n    ]\n    \n    if not step_save_report_reasons:\n        step_save_report_md_lines.append(\"- No specific reasons provided.\")\n    else:\n        for reason in step_save_report_reasons:\n            step_save_report_md_lines.append(f\"- {reason}\")\n\n    step_save_report_markdown_content = \"\\n\".join(step_save_report_md_lines)\n\n    # 3. Save to a local file\n    step_save_report_file_path = \"risk_decision_report.md\"\n    with open(step_save_report_file_path, \"w\") as f:\n        f.write(step_save_report_markdown_content)\n\n    # 4. Upload the artifact\n    step_save_report_artifact_url = await upload_output_file(step_save_report_file_path)\n\n    # 5. Render HTML Summary (Atmospheric Glass)\n    step_save_report_badge_map = {\n        \"At Risk\": \"ag-badge-error\",\n        \"On Track\": \"ag-badge-success\",\n        \"Needs Human Review\": \"ag-badge-warning\"\n    }\n    step_save_report_badge_class = step_save_report_badge_map.get(step_save_report_risk_level, \"ag-badge-neutral\")\n\n    step_save_report_html = f\"\"\"\n<div class=\"ag-root\">\n    <div class=\"ag-card\">\n        <h2 class=\"ag-h2\">Report Generated</h2>\n        <p class=\"ag-body\">The automated risk decision report has been successfully generated and saved.</p>\n        \n        <div style=\"margin-bottom: 12px;\">\n            <span class=\"ag-muted\">Risk Level:</span>\n            <span class=\"ag-badge {step_save_report_badge_class}\">{step_save_report_risk_level}</span>\n        </div>\n\n        <p class=\"ag-body\">\n            <a class=\"ag-link\" href=\"{step_save_report_artifact_url}\" target=\"_blank\">Download risk_decision_report.md</a>\n        </p>\n    </div>\n</div>\n\"\"\"\n    display(HTML(step_save_report_html))\n\n    # 6. Output JSON to stdout\n    step_save_report_result = {\n        \"status\": \"success\",\n        \"artifact_name\": \"risk_decision_report.md\",\n        \"artifact_url\": step_save_report_artifact_url,\n        \"risk_level\": step_save_report_risk_level,\n        \"recommended_action\": step_save_report_recommended_action\n    }\n    print(json.dumps(step_save_report_result, indent=2))\n\nawait step_save_report_implementation()\n",
+                "next_steps": []
+              }
+            ],
+            "pip_packages": [],
+            "integration_overrides": {}
+          }
+        },
+        {
+          "sourceVersionId": "019f7705-dc1b-7000-b713-641a4a510dc7",
+          "versionNumber": 3,
+          "commitMessage": null,
+          "definition": {
+            "name": "Risk Scoring Operator",
+            "description": "Evaluates program signals against configurable thresholds to determine if a participant or resource is On Track, At Risk, or Needs Human Review.",
+            "business_functions": [
+              "Risk Management",
+              "Compliance",
+              "Operations"
+            ],
+            "envs": [
+              {
+                "name": "AT_RISK_PULSE_FLOOR",
+                "description": "Minimum pulse score to be considered at risk. Default: 3"
+              },
+              {
+                "name": "STALLED_COUNT_THRESHOLD",
+                "description": "Threshold for number of stalled items to be considered a medium signal. Default: 3"
+              },
+              {
+                "name": "MID_LOW_PULSE_MIN",
+                "description": "Minimum pulse score for the mid-low medium signal range. Default: 4"
+              },
+              {
+                "name": "MID_LOW_PULSE_MAX",
+                "description": "Maximum pulse score for the mid-low medium signal range. Default: 5"
+              }
+            ],
+            "inputs": [
+              {
+                "name": "critical_gap",
+                "description": "Is there a critical access gap?",
+                "type": "checkbox",
+                "label": "Critical Gap",
+                "required": true
+              },
+              {
+                "name": "compliance_stalled",
+                "description": "Is a compliance document stalled past its milestone?",
+                "type": "checkbox",
+                "label": "Compliance Stalled",
+                "required": true
+              },
+              {
+                "name": "stalled_count",
+                "description": "The number of stalled items or processes.",
+                "type": "number",
+                "label": "Stalled Count",
+                "required": true
+              },
+              {
+                "name": "min_pulse_score",
+                "description": "The current minimum pulse score (e.g., 1-10). Optional.",
+                "type": "number",
+                "label": "Minimum Pulse Score",
+                "required": false
+              },
+              {
+                "name": "disengaged_status",
+                "description": "Is the participant currently disengaged or unresponsive?",
+                "type": "checkbox",
+                "label": "Disengaged Status",
+                "required": true
+              },
+              {
+                "name": "day_in_program",
+                "description": "Number of days the participant has been in the program.",
+                "type": "number",
+                "label": "Day in Program",
+                "required": true
+              },
+              {
+                "name": "resource_status",
+                "description": "Current status of the day-one resource.",
+                "type": "select",
+                "label": "Resource Status",
+                "required": true,
+                "options": [
+                  "Blocked",
+                  "Requested",
+                  "Fulfilled"
+                ]
+              }
+            ],
+            "start_at": [
+              "eval_risk"
+            ],
+            "steps": [
+              {
+                "id": "eval_risk",
+                "name": "Evaluate Risk Signals",
+                "description": "Analyzes input signals and configurable thresholds to compute the initial risk level.",
+                "agent_prompt": "Implement the eval_risk step.\n1. Extract exactly these keys from user_inputs: 'critical_gap', 'compliance_stalled', 'stalled_count', 'min_pulse_score', 'disengaged_status', 'day_in_program', and 'resource_status'.\n2. Missing Data Check: 'critical_gap', 'compliance_stalled', 'stalled_count', 'disengaged_status', 'day_in_program', and 'resource_status' are required. If any of these are None or missing, set risk_level='Needs Human Review', reasons=['Incomplete data'], and recommended_action='Escalate', and skip the rest of the checks. 'min_pulse_score' is OPTIONAL and MUST be excluded from this missing data check.\n3. Retrieve thresholds from environment variables (defaults): AT_RISK_PULSE_FLOOR (3), STALLED_COUNT_THRESHOLD (3), MID_LOW_PULSE_MIN (4), MID_LOW_PULSE_MAX (5).\n4. Pulse Logic: Only apply pulse-based risk rules if 'min_pulse_score' is NOT None.\n5. High Signals: (a) critical_gap is True, (b) min_pulse_score is NOT None and <= AT_RISK_PULSE_FLOOR, (c) compliance_stalled is True.\n6. Medium Signals: (a) stalled_count >= STALLED_COUNT_THRESHOLD, (b) min_pulse_score is NOT None and MID_LOW_PULSE_MIN <= min_pulse_score <= MID_LOW_PULSE_MAX, (c) disengaged_status is True, (d) day_in_program == 1 AND resource_status in ['Requested', 'Blocked'].\n7. Decision: If 2 or more medium signals are true, or any high signal is true, set risk_level='At Risk', reasons=[triggered rules list], recommended_action='Intervene'. Otherwise, set risk_level='On Track', reasons=['No risk signals met'], recommended_action='Continue monitoring'.\n8. Output: Save risk_level, reasons, and recommended_action to global variables for downstream steps (e.g. globals()['step_eval_risk_risk_level'] = risk_level). Print a JSON summary.",
+                "services": [],
+                "is_human_input_step": false,
+                "depends_on": [],
+                "code_cell": "import os\nimport json\nfrom IPython.display import HTML, display\n\nasync def run_step_eval_risk():\n    # 1. Retrieve Inputs\n    # Note: user_inputs is a globally available dictionary\n    access_gap = user_inputs.get('access_gap')\n    compliance_stalled = user_inputs.get('compliance_stalled')\n    stalled_count = user_inputs.get('stalled_count')\n    pulse_score = user_inputs.get('pulse_score')\n    disengaged_status = user_inputs.get('disengaged_status')\n    day_in_program = user_inputs.get('day_in_program')\n    resource_status = user_inputs.get('resource_status')\n\n    # 2. Retrieve Thresholds from Environment Variables\n    at_risk_pulse_floor = int(os.environ.get('AT_RISK_PULSE_FLOOR', 3))\n    stalled_count_threshold = int(os.environ.get('STALLED_COUNT_THRESHOLD', 3))\n    mid_low_pulse_min = int(os.environ.get('MID_LOW_PULSE_MIN', 4))\n    mid_low_pulse_max = int(os.environ.get('MID_LOW_PULSE_MAX', 5))\n\n    # 3. Initialize Risk Variables\n    step_eval_risk_risk_level = \"\"\n    step_eval_risk_reasons = []\n    step_eval_risk_recommended_action = \"\"\n\n    # 4. Check for Data Completeness\n    # The prompt highlights pulse_score as a key check, but mentions \"any required input\".\n    # Based on the input schema, most are required except pulse_score (which logic depends on).\n    required_inputs = {\n        \"Critical Access Gap\": access_gap,\n        \"Compliance Stalled\": compliance_stalled,\n        \"Stalled Count\": stalled_count,\n        \"Pulse Score\": pulse_score,\n        \"Disengaged Status\": disengaged_status,\n        \"Day in Program\": day_in_program,\n        \"Resource Status\": resource_status\n    }\n\n    missing_fields = [k for k, v in required_inputs.items() if v is None]\n\n    if missing_fields:\n        step_eval_risk_risk_level = 'Needs Human Review'\n        step_eval_risk_reasons = ['Incomplete data']\n        step_eval_risk_recommended_action = 'Escalate'\n    else:\n        # 5. Determine if AT RISK\n        is_at_risk = False\n        triggered_rules = []\n\n        # High Signals\n        if access_gap is True:\n            is_at_risk = True\n            triggered_rules.append(\"Critical access gap detected.\")\n        \n        if pulse_score <= at_risk_pulse_floor:\n            is_at_risk = True\n            triggered_rules.append(f\"Pulse score ({pulse_score}) is at or below the floor threshold ({at_risk_pulse_floor}).\")\n\n        if compliance_stalled is True:\n            is_at_risk = True\n            triggered_rules.append(\"Compliance document is stalled past milestone.\")\n\n        # Medium Signals\n        medium_signals_count = 0\n        medium_reasons = []\n\n        if stalled_count >= stalled_count_threshold:\n            medium_signals_count += 1\n            medium_reasons.append(f\"Stalled count ({stalled_count}) meets or exceeds threshold ({stalled_count_threshold}).\")\n\n        if mid_low_pulse_min <= pulse_score <= mid_low_pulse_max:\n            medium_signals_count += 1\n            medium_reasons.append(f\"Pulse score ({pulse_score}) is within the mid-low range ({mid_low_pulse_min}-{mid_low_pulse_max}).\")\n\n        if disengaged_status is True:\n            medium_signals_count += 1\n            medium_reasons.append(\"Participant is currently disengaged or unresponsive.\")\n\n        if day_in_program == 1 and resource_status == 'Requested':\n            medium_signals_count += 1\n            medium_reasons.append(\"Day-one resource is still in 'Requested' status.\")\n\n        # If 2 or more medium signals are true, mark as AT RISK\n        if medium_signals_count >= 2:\n            is_at_risk = True\n            triggered_rules.extend(medium_reasons)\n\n        # 6. Final Decision Logic\n        if is_at_risk:\n            step_eval_risk_risk_level = 'At Risk'\n            step_eval_risk_reasons = triggered_rules\n            step_eval_risk_recommended_action = 'Intervene'\n        else:\n            step_eval_risk_risk_level = 'On Track'\n            step_eval_risk_reasons = ['No risk signals met']\n            step_eval_risk_recommended_action = 'Continue monitoring'\n\n    # 7. Persist variables for downstream steps\n    globals()['step_eval_risk_risk_level'] = step_eval_risk_risk_level\n    globals()['step_eval_risk_reasons'] = step_eval_risk_reasons\n    globals()['step_eval_risk_recommended_action'] = step_eval_risk_recommended_action\n\n    # 8. Output HTML Summary\n    badge_class = \"ag-badge-neutral\"\n    if step_eval_risk_risk_level == \"At Risk\":\n        badge_class = \"ag-badge-error\"\n    elif step_eval_risk_risk_level == \"On Track\":\n        badge_class = \"ag-badge-success\"\n    elif step_eval_risk_risk_level == \"Needs Human Review\":\n        badge_class = \"ag-badge-warning\"\n\n    reasons_html = \"\".join([f\"<li>{r}</li>\" for r in step_eval_risk_reasons])\n    \n    html_output = f\"\"\"\n    <div class=\"ag-root\">\n        <div class=\"ag-card\">\n            <h2 class=\"ag-h2\">Risk Assessment Result</h2>\n            <p class=\"ag-body\">Evaluated program signals against configured thresholds.</p>\n            \n            <div style=\"margin-bottom: 16px;\">\n                <span class=\"ag-muted\">Risk Level:</span>\n                <span class=\"ag-badge {badge_class}\">{step_eval_risk_risk_level}</span>\n            </div>\n            \n            <div style=\"margin-bottom: 16px;\">\n                <span class=\"ag-muted\">Recommended Action:</span>\n                <p class=\"ag-body\"><strong>{step_eval_risk_recommended_action}</strong></p>\n            </div>\n\n            <h3 class=\"ag-h3\">Reasons / Triggered Signals</h3>\n            <ul class=\"ag-body\">\n                {reasons_html}\n            </ul>\n        </div>\n    </div>\n    \"\"\"\n    display(HTML(html_output))\n\n    # 9. Output JSON stdout\n    result_payload = {\n        \"risk_level\": step_eval_risk_risk_level,\n        \"reasons\": step_eval_risk_reasons,\n        \"recommended_action\": step_eval_risk_recommended_action,\n        \"inputs_processed\": {\n            \"access_gap\": access_gap,\n            \"compliance_stalled\": compliance_stalled,\n            \"stalled_count\": stalled_count,\n            \"pulse_score\": pulse_score,\n            \"disengaged_status\": disengaged_status,\n            \"day_in_program\": day_in_program,\n            \"resource_status\": resource_status\n        }\n    }\n    print(json.dumps(result_payload, indent=2))\n\nawait run_step_eval_risk()\n",
+                "next_steps": [
+                  {
+                    "step_id": "escalate_review",
+                    "condition": {
+                      "id": "needs_human_review_cond",
+                      "name": "Needs Human Review",
+                      "description": "Check if the decision requires human escalation.",
+                      "agent_prompt": "Return True if the calculated risk_level from the previous step is 'Needs Human Review', otherwise False.",
+                      "condition_code_cell": "# Implementation for condition: needs_human_review_cond\n# This condition checks if the risk level calculated in the 'eval_risk' step is 'Needs Human Review'\n\ncond_needs_human_review_cond_risk_level = globals().get('step_eval_risk_risk_level')\ncond_needs_human_review_cond_result = cond_needs_human_review_cond_risk_level == 'Needs Human Review'\n\nprint(cond_needs_human_review_cond_result)"
+                    }
+                  },
+                  {
+                    "step_id": "save_report",
+                    "condition": {
+                      "id": "automated_decision_cond",
+                      "name": "Automated Decision",
+                      "description": "Check if the decision was automated successfully.",
+                      "agent_prompt": "Return True if the calculated risk_level from the previous step is NOT 'Needs Human Review', otherwise False.",
+                      "condition_code_cell": "# Condition: Automated Decision\n# Logic: Return True if the risk_level is NOT 'Needs Human Review'\n\n# Retrieve the risk level calculated in the 'eval_risk' step\ncond_automated_decision_cond_risk_level = globals().get('step_eval_risk_risk_level')\n\n# The condition is met if the risk level is anything other than 'Needs Human Review'\n# (e.g., 'At Risk' or 'On Track')\nprint(cond_automated_decision_cond_risk_level != 'Needs Human Review')\n"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "escalate_review",
+                "name": "Escalate for Human Review",
+                "description": "Prompts a human reviewer to manually determine the risk level when data is incomplete or signals conflict.",
+                "agent_prompt": "Use create_human_input_form to generate a review form. The form should display the reasons for escalation (e.g. 'Incomplete data') and the originally provided inputs. Include a dropdown field named 'final_risk_level' with options ['On Track', 'At Risk'] and a text field named 'final_action' for the reviewer to manually determine the outcome.",
+                "services": [
+                  "human_input_form"
+                ],
+                "is_human_input_step": true,
+                "depends_on": [
+                  "eval_risk"
+                ],
+                "next_steps": []
+              },
+              {
+                "id": "save_report",
+                "name": "Save Automated Report",
+                "description": "Saves the automated risk decision and reasons into a report artifact.",
+                "agent_prompt": "Format the automated decision (risk_level, reasons, and recommended_action) into a clear, readable markdown text. Save this text into an output artifact named 'risk_decision_report.md' so it can be downloaded or reviewed by the user.",
+                "services": [
+                  "output_artifacts"
+                ],
+                "is_human_input_step": false,
+                "depends_on": [
+                  "eval_risk"
+                ],
+                "code_cell": "import os\nimport json\nfrom IPython.display import HTML, display\n\nasync def step_save_report_implementation():\n    # 1. Retrieve data from previous step\n    step_save_report_risk_level = globals().get('step_eval_risk_risk_level', 'Unknown')\n    step_save_report_reasons = globals().get('step_eval_risk_reasons', [])\n    step_save_report_recommended_action = globals().get('step_eval_risk_recommended_action', 'None')\n\n    # 2. Format as Markdown\n    step_save_report_md_lines = [\n        \"# Risk Decision Report\",\n        f\"**Risk Level:** {step_save_report_risk_level}\",\n        f\"**Recommended Action:** {step_save_report_recommended_action}\",\n        \"\",\n        \"## Reasons / Triggered Signals\"\n    ]\n    \n    if not step_save_report_reasons:\n        step_save_report_md_lines.append(\"- No specific reasons provided.\")\n    else:\n        for reason in step_save_report_reasons:\n            step_save_report_md_lines.append(f\"- {reason}\")\n\n    step_save_report_markdown_content = \"\\n\".join(step_save_report_md_lines)\n\n    # 3. Save to a local file\n    step_save_report_file_path = \"risk_decision_report.md\"\n    with open(step_save_report_file_path, \"w\") as f:\n        f.write(step_save_report_markdown_content)\n\n    # 4. Upload the artifact\n    step_save_report_artifact_url = await upload_output_file(step_save_report_file_path)\n\n    # 5. Render HTML Summary (Atmospheric Glass)\n    step_save_report_badge_map = {\n        \"At Risk\": \"ag-badge-error\",\n        \"On Track\": \"ag-badge-success\",\n        \"Needs Human Review\": \"ag-badge-warning\"\n    }\n    step_save_report_badge_class = step_save_report_badge_map.get(step_save_report_risk_level, \"ag-badge-neutral\")\n\n    step_save_report_html = f\"\"\"\n<div class=\"ag-root\">\n    <div class=\"ag-card\">\n        <h2 class=\"ag-h2\">Report Generated</h2>\n        <p class=\"ag-body\">The automated risk decision report has been successfully generated and saved.</p>\n        \n        <div style=\"margin-bottom: 12px;\">\n            <span class=\"ag-muted\">Risk Level:</span>\n            <span class=\"ag-badge {step_save_report_badge_class}\">{step_save_report_risk_level}</span>\n        </div>\n\n        <p class=\"ag-body\">\n            <a class=\"ag-link\" href=\"{step_save_report_artifact_url}\" target=\"_blank\">Download risk_decision_report.md</a>\n        </p>\n    </div>\n</div>\n\"\"\"\n    display(HTML(step_save_report_html))\n\n    # 6. Output JSON to stdout\n    step_save_report_result = {\n        \"status\": \"success\",\n        \"artifact_name\": \"risk_decision_report.md\",\n        \"artifact_url\": step_save_report_artifact_url,\n        \"risk_level\": step_save_report_risk_level,\n        \"recommended_action\": step_save_report_recommended_action\n    }\n    print(json.dumps(step_save_report_result, indent=2))\n\nawait step_save_report_implementation()\n",
+                "next_steps": []
+              }
+            ],
+            "pip_packages": [],
+            "integration_overrides": {}
+          }
+        }
+      ]
+    }
+  ],
+  "schedules": [],
+  "integrationsManifest": {
+    "services": [
+      "human_input_form",
+      "output_artifacts"
+    ],
+    "envNames": [
+      "AT_RISK_PULSE_FLOOR",
+      "MID_LOW_PULSE_MAX",
+      "MID_LOW_PULSE_MIN",
+      "STALLED_COUNT_THRESHOLD"
+    ]
+  }
+}

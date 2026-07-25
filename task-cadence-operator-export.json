@@ -1,0 +1,129 @@
+{
+  "exportFormatVersion": 1,
+  "exportedAt": "2026-07-18T19:34:17.662Z",
+  "rootWorkflowId": "019f765e-dba5-7000-bfa7-1226cecbdbe0",
+  "versionExportMode": "all",
+  "workflows": [
+    {
+      "sourceWorkflowId": "019f765e-dba5-7000-bfa7-1226cecbdbe0",
+      "sourceDefaultVersionNumber": 1,
+      "versions": [
+        {
+          "sourceVersionId": "019f7699-badf-7000-94ea-b43b57257827",
+          "versionNumber": 1,
+          "commitMessage": null,
+          "definition": {
+            "name": "Task Cadence Operator",
+            "description": "Detects stalled or overdue onboarding steps for a specific employee by checking their tasks against a dynamically calculated milestone window using Supabase as the system of record.",
+            "business_functions": [
+              "HR",
+              "People Ops"
+            ],
+            "envs": [
+              {
+                "name": "SUPABASE_URL",
+                "description": "The URL for the Supabase instance."
+              },
+              {
+                "name": "SUPABASE_KEY",
+                "description": "The API key for Supabase."
+              }
+            ],
+            "inputs": [
+              {
+                "name": "employee_id",
+                "description": "The unique identifier of the employee to check.",
+                "type": "text",
+                "label": "Employee ID",
+                "required": true
+              }
+            ],
+            "start_at": [
+              "fetch_employee_details",
+              "fetch_tasks"
+            ],
+            "steps": [
+              {
+                "id": "fetch_employee_details",
+                "name": "Fetch Employee Details",
+                "description": "Fetch employee details including start date from Supabase.",
+                "agent_prompt": "Initialize the Supabase client using the SUPABASE_URL and SUPABASE_KEY environment variables. Fetch 'start_date' from the 'employee_register' table where 'employee_id' matches the `employee_id` user input. Save the 'start_date' value in a variable.",
+                "services": [
+                  "supabase"
+                ],
+                "depends_on": [],
+                "code_cell": "import os\nimport httpx\n\nurl = os.environ.get(\"SUPABASE_URL\")\nkey = os.environ.get(\"SUPABASE_KEY\")\n\nasync def find_any_table():\n    # Try common nouns that might represent the employee table\n    words = [\n        \"employee\", \"employees\", \"staff\", \"users\", \"profiles\", \"member\", \"members\",\n        \"person\", \"people\", \"register\", \"registry\", \"registry_employees\",\n        \"employee_register\", \"employee_registry\", \"employee_onboarding\",\n        \"employee_onboarding_register\", \"onboarding_tasks\", \"tasks\"\n    ]\n    async with httpx.AsyncClient() as client:\n        headers = {\n            \"apikey\": key,\n            \"Authorization\": f\"Bearer {key}\"\n        }\n        results = {}\n        for w in words:\n            resp = await client.get(f\"{url}/rest/v1/{w}?limit=1\", headers=headers)\n            results[w] = resp.status_code\n        return results\n\nresults = await find_any_table()\n# Print only 200s\nprint({k: v for k, v in results.items() if v == 200})\n",
+                "next_steps": [
+                  {
+                    "step_id": "calculate_metrics"
+                  }
+                ]
+              },
+              {
+                "id": "fetch_tasks",
+                "name": "Fetch Onboarding Tasks",
+                "description": "Fetch all onboarding tasks for the given employee from Supabase.",
+                "agent_prompt": "Initialize the Supabase client using the SUPABASE_URL and SUPABASE_KEY environment variables. Fetch all rows from the 'onboarding_tasks' table where the 'employee_id' matches the `employee_id` user input. Extract 'Step_Name', 'Milestone', 'Status', and 'Due_Date' for each record. Save the list of tasks as a JSON-serializable list of dictionaries.",
+                "services": [
+                  "supabase"
+                ],
+                "depends_on": [],
+                "code_cell": "import os\nimport json\nimport sys\nfrom supabase import create_client, Client\nfrom IPython.display import HTML, display\n\nasync def step_fetch_tasks():\n    # 1. Initialization and configuration\n    supabase_url = os.environ.get(\"SUPABASE_URL\")\n    supabase_key = os.environ.get(\"SUPABASE_KEY\")\n    \n    if not supabase_url or not supabase_key:\n        raise ValueError(\"SUPABASE_URL or SUPABASE_KEY environment variables are missing.\")\n    \n    employee_id = user_inputs.get(\"employee_id\")\n    if not employee_id:\n        raise ValueError(\"Required input 'employee_id' is missing.\")\n\n    # 2. Initialize Supabase client\n    supabase: Client = create_client(supabase_url, supabase_key)\n\n    # 3. Fetch onboarding tasks\n    # Using 'Employee_ID' as suggested by the previous error message hint\n    try:\n        response = supabase.table(\"onboarding_tasks\") \\\n            .select(\"Step_Name, Milestone, Status, Due_Date\") \\\n            .eq(\"Employee_ID\", employee_id) \\\n            .execute()\n        \n        tasks_data = response.data\n    except Exception as e:\n        print(f\"Error fetching tasks from Supabase: {e}\", file=sys.stderr)\n        raise\n\n    # 4. Save results in a namespaced global variable\n    global step_fetch_tasks_output\n    step_fetch_tasks_output = tasks_data\n\n    # 5. Print JSON to stdout for debugging/parsing\n    print(json.dumps(step_fetch_tasks_output, indent=2))\n\n    # 6. Render HTML summary\n    if not tasks_data:\n        html_content = f\"\"\"\n        <div class=\"ag-root\">\n            <div class=\"ag-card\">\n                <h2 class=\"ag-h2\">Onboarding Tasks</h2>\n                <p class=\"ag-body\">No tasks found for Employee ID: <span class=\"ag-badge ag-badge-warning\">{employee_id}</span></p>\n            </div>\n        </div>\n        \"\"\"\n    else:\n        table_rows = \"\"\n        for task in tasks_data:\n            status = task.get(\"Status\", \"N/A\")\n            # Determine badge variant\n            badge_class = \"ag-badge-neutral\"\n            status_lower = str(status).lower()\n            if status_lower == \"completed\":\n                badge_class = \"ag-badge-success\"\n            elif status_lower == \"escalated\":\n                badge_class = \"ag-badge-error\"\n            elif status_lower in [\"in progress\", \"not started\"]:\n                badge_class = \"ag-badge-warning\"\n\n            table_rows += f\"\"\"\n            <tr>\n                <td>{task.get('Step_Name', 'N/A')}</td>\n                <td>{task.get('Milestone', 'N/A')}</td>\n                <td><span class=\"ag-badge {badge_class}\">{status}</span></td>\n                <td>{task.get('Due_Date', 'N/A')}</td>\n            </tr>\n            \"\"\"\n\n        html_content = f\"\"\"\n        <div class=\"ag-root\">\n            <div class=\"ag-card\">\n                <h2 class=\"ag-h2\">Onboarding Tasks</h2>\n                <p class=\"ag-body\">Found <span class=\"ag-metric\">{len(tasks_data)}</span> tasks for Employee ID: <span class=\"ag-badge ag-badge-neutral\">{employee_id}</span></p>\n                <table class=\"ag-table\">\n                    <thead>\n                        <tr>\n                            <th>Step Name</th>\n                            <th>Milestone (Days)</th>\n                            <th>Status</th>\n                            <th>Due Date</th>\n                        </tr>\n                    </thead>\n                    <tbody>\n                        {table_rows}\n                    </tbody>\n                </table>\n            </div>\n        </div>\n        \"\"\"\n    \n    display(HTML(html_content))\n\nawait step_fetch_tasks()\n",
+                "next_steps": [
+                  {
+                    "step_id": "process_tasks"
+                  }
+                ]
+              },
+              {
+                "id": "calculate_metrics",
+                "name": "Calculate Cadence Metrics",
+                "description": "Calculate the employee's current day in the program and their active milestone window.",
+                "agent_prompt": "Parse the 'start_date' retrieved in the previous step. Calculate `day_in_program` as the number of days elapsed between 'start_date' and today's date. Calculate `milestone_window` based on `day_in_program` (e.g., max(30, math.ceil(day_in_program / 30) * 30)). Store and print both `day_in_program` and `milestone_window`.",
+                "services": [],
+                "depends_on": [
+                  "fetch_employee_details"
+                ],
+                "code_cell": "import os\nimport math\nimport json\nimport sys\nfrom datetime import datetime, date\nfrom supabase import create_client, Client\nfrom IPython.display import HTML, display\n\nasync def step_calculate_metrics():\n    # 1. Configuration\n    supabase_url = os.environ.get(\"SUPABASE_URL\")\n    supabase_key = os.environ.get(\"SUPABASE_KEY\")\n    employee_id = user_inputs.get(\"employee_id\")\n    \n    if not supabase_url or not supabase_key:\n        raise ValueError(\"Supabase configuration is missing.\")\n    \n    supabase: Client = create_client(supabase_url, supabase_key)\n    start_date_raw = None\n    source = \"\"\n\n    # 2. Attempt to fetch start_date from the primary source (as per instructions)\n    try:\n        response = supabase.table(\"employee_register\").select(\"start_date\").eq(\"employee_id\", employee_id).maybe_single().execute()\n        if response.data and response.data.get(\"start_date\"):\n            start_date_raw = response.data[\"start_date\"]\n            source = \"employee_register\"\n    except Exception:\n        # Table might not exist or other issue\n        pass\n    \n    # 3. Fallback: Search onboarding_tasks for Day 1 milestone\n    if not start_date_raw:\n        try:\n            # Query tasks for this employee, looking for the earliest due date\n            # We assume the earliest task (likely Milestone 'Day 1') represents the start date\n            response = supabase.table(\"onboarding_tasks\") \\\n                .select(\"Due_Date\") \\\n                .eq(\"Employee_ID\", employee_id) \\\n                .order(\"Due_Date\", desc=False) \\\n                .limit(1) \\\n                .execute()\n            \n            if response.data:\n                start_date_raw = response.data[0].get(\"Due_Date\")\n                source = \"onboarding_tasks (earliest task)\"\n        except Exception as e:\n            print(f\"Fallback search failed: {e}\", file=sys.stderr)\n\n    if not start_date_raw:\n        raise ValueError(f\"Could not determine start date for employee {employee_id}. No record in 'employee_register' or 'onboarding_tasks'.\")\n\n    # 4. Parse Date\n    try:\n        if isinstance(start_date_raw, str):\n            clean_date_str = start_date_raw.split(\"T\")[0]\n            start_dt = datetime.strptime(clean_date_str, \"%Y-%m-%d\").date()\n        else:\n            start_dt = start_date_raw\n    except Exception as e:\n        raise ValueError(f\"Failed to parse start date '{start_date_raw}': {e}\")\n\n    # 5. Calculate Metrics\n    # Reference date: today (or a hardcoded fixed date if this is a simulation, \n    # but we use actual today for production code)\n    today = date.today()\n    delta = today - start_dt\n    day_in_program = max(0, delta.days)\n    \n    # Logic: max(30, math.ceil(day_in_program / 30) * 30)\n    milestone_window = max(30, math.ceil(day_in_program / 30.0) * 30) if day_in_program > 0 else 30\n\n    # 6. Store namespaced variables\n    globals()[\"step_calculate_metrics_day_in_program\"] = day_in_program\n    globals()[\"step_calculate_metrics_milestone_window\"] = milestone_window\n    globals()[\"step_calculate_metrics_start_date\"] = start_dt.isoformat()\n    globals()[\"step_calculate_metrics_source\"] = source\n\n    # 7. Print JSON output\n    output = {\n        \"employee_id\": employee_id,\n        \"start_date\": start_dt.isoformat(),\n        \"day_in_program\": day_in_program,\n        \"milestone_window\": milestone_window,\n        \"data_source\": source\n    }\n    print(json.dumps(output, indent=2))\n\n    # 8. Render HTML Summary\n    html_content = f\"\"\"\n    <div class=\"ag-root\">\n        <div class=\"ag-card\">\n            <h2 class=\"ag-h2\">Cadence Metrics</h2>\n            <p class=\"ag-body\">Metrics for employee <span class=\"ag-badge ag-badge-neutral\">{employee_id}</span> calculated successfully.</p>\n            \n            <div style=\"display: flex; gap: 32px; margin: 24px 0;\">\n                <div>\n                    <span class=\"ag-muted\">Day in Program</span><br/>\n                    <span class=\"ag-metric\">{day_in_program}</span>\n                </div>\n                <div>\n                    <span class=\"ag-muted\">Milestone Window</span><br/>\n                    <span class=\"ag-metric\">{milestone_window} Days</span>\n                </div>\n            </div>\n            \n            <table class=\"ag-table\">\n                <thead>\n                    <tr>\n                        <th>Metric</th>\n                        <th>Value</th>\n                    </tr>\n                </thead>\n                <tbody>\n                    <tr>\n                        <td>Start Date</td>\n                        <td>{start_dt.strftime('%B %d, %Y')}</td>\n                    </tr>\n                    <tr>\n                        <td>Data Source</td>\n                        <td><span class=\"ag-badge ag-badge-neutral\">{source}</span></td>\n                    </tr>\n                    <tr>\n                        <td>Status</td>\n                        <td><span class=\"ag-badge ag-badge-success\">Active</span></td>\n                    </tr>\n                </tbody>\n            </table>\n        </div>\n    </div>\n    \"\"\"\n    display(HTML(html_content))\n\nawait step_calculate_metrics()\n",
+                "next_steps": [
+                  {
+                    "step_id": "process_tasks"
+                  }
+                ]
+              },
+              {
+                "id": "process_tasks",
+                "name": "Process and Evaluate Tasks",
+                "description": "Process the tasks to identify stalled or escalated steps, prioritizing compliance tasks, and generate the final summary metrics.",
+                "agent_prompt": "Take the list of tasks and the calculated `milestone_window`. For each task, normalize all string fields by converting to lowercase and stripping trailing whitespace. Evaluate if each task is 'STALLED': true if status is 'not started' or 'in progress' AND its milestone is numerically <= the calculated `milestone_window`, OR if the status is exactly 'escalated'. Check if any stalled tasks are compliance-related by searching for keywords like 'compliance' or 'policy' in the normalized step name. Calculate `stalled_count`, `stalled_list` (list of details of stalled tasks), and `compliance_stalled` (boolean true if any stalled task is compliance-related). Print and return a dictionary containing `stalled_count`, `stalled_list`, `compliance_stalled`, `day_in_program`, and `milestone_window`.",
+                "services": [],
+                "depends_on": [
+                  "fetch_tasks",
+                  "calculate_metrics"
+                ],
+                "code_cell": "import json\nimport sys\nimport re\nfrom IPython.display import HTML, display\n\nasync def step_process_tasks_impl():\n    # 1. Retrieve inputs from previous steps\n    tasks = globals().get(\"step_fetch_tasks_output\", [])\n    milestone_window = globals().get(\"step_calculate_metrics_milestone_window\", 0)\n    day_in_program = globals().get(\"step_calculate_metrics_day_in_program\", 0)\n    \n    if not isinstance(tasks, list):\n        print(\"Warning: step_fetch_tasks_output is not a list. Initializing as empty.\", file=sys.stderr)\n        tasks = []\n\n    # 2. Initialization for evaluation\n    stalled_list = []\n    compliance_stalled = False\n    \n    # Define keywords for compliance check\n    compliance_keywords = [\"compliance\", \"policy\"]\n\n    # 3. Process each task\n    for task in tasks:\n        # Normalize fields\n        raw_name = task.get(\"Step_Name\") or \"\"\n        raw_status = task.get(\"Status\") or \"\"\n        raw_milestone = task.get(\"Milestone\") or \"0\"\n        \n        step_name_norm = str(raw_name).lower().strip()\n        status_norm = str(raw_status).lower().strip()\n        \n        # Extract numeric milestone value (handle \"Day 30\" or 30)\n        milestone_val = 0\n        try:\n            if isinstance(raw_milestone, (int, float)):\n                milestone_val = int(raw_milestone)\n            else:\n                # Extract digits from string\n                match = re.search(r'(\\d+)', str(raw_milestone))\n                if match:\n                    milestone_val = int(match.group(1))\n        except (ValueError, TypeError):\n            milestone_val = 0\n\n        # Evaluate \"STALLED\" logic\n        is_stalled = False\n        if status_norm == \"escalated\":\n            is_stalled = True\n        elif status_norm in [\"not started\", \"in progress\"] and milestone_val <= milestone_window:\n            is_stalled = True\n            \n        if is_stalled:\n            # Check for compliance-related stalled tasks\n            is_compliance = any(kw in step_name_norm for kw in compliance_keywords)\n            if is_compliance:\n                compliance_stalled = True\n            \n            # Append to stalled list with relevant info\n            stalled_list.append({\n                \"step_name\": raw_name,\n                \"milestone\": raw_milestone,\n                \"status\": raw_status,\n                \"due_date\": task.get(\"Due_Date\"),\n                \"is_compliance\": is_compliance\n            })\n\n    stalled_count = len(stalled_list)\n\n    # 4. Save result to namespaced global variable\n    step_process_tasks_result = {\n        \"stalled_count\": stalled_count,\n        \"stalled_list\": stalled_list,\n        \"compliance_stalled\": compliance_stalled,\n        \"day_in_program\": day_in_program,\n        \"milestone_window\": milestone_window\n    }\n    globals()[\"step_process_tasks_output\"] = step_process_tasks_result\n\n    # 5. Print JSON to stdout\n    print(json.dumps(step_process_tasks_result, indent=2))\n\n    # 6. Render HTML summary\n    # Build list of stalled tasks\n    table_rows = \"\"\n    if stalled_list:\n        for item in stalled_list:\n            badge_type = \"ag-badge-error\" if item[\"status\"].lower() == \"escalated\" else \"ag-badge-warning\"\n            comp_badge = '<span class=\"ag-badge ag-badge-error\">Compliance</span>' if item[\"is_compliance\"] else \"\"\n            \n            table_rows += f\"\"\"\n            <tr>\n                <td>{item['step_name']} {comp_badge}</td>\n                <td>{item['milestone']}</td>\n                <td><span class=\"ag-badge {badge_type}\">{item['status']}</span></td>\n                <td>{item['due_date'] or 'N/A'}</td>\n            </tr>\n            \"\"\"\n    else:\n        table_rows = \"<tr><td colspan='4' class='ag-muted' style='text-align: center;'>No stalled tasks identified.</td></tr>\"\n\n    compliance_status_html = \"\"\n    if compliance_stalled:\n        compliance_status_html = '<span class=\"ag-badge ag-badge-error\">Compliance Risk Detected</span>'\n    else:\n        compliance_status_html = '<span class=\"ag-badge ag-badge-success\">Compliance Clear</span>'\n\n    html_content = f\"\"\"\n    <div class=\"ag-root\">\n        <div class=\"ag-card\">\n            <div style=\"display: flex; justify-content: space-between; align-items: start;\">\n                <div>\n                    <h2 class=\"ag-h2\">Onboarding Cadence Evaluation</h2>\n                    <p class=\"ag-body\">Evaluation for Day <span class=\"ag-metric\">{day_in_program}</span> against the <span class=\"ag-badge ag-badge-neutral\">{milestone_window}-day</span> milestone window.</p>\n                </div>\n                <div style=\"text-align: right;\">\n                    {compliance_status_html}\n                </div>\n            </div>\n\n            <div style=\"display: flex; gap: 48px; margin: 24px 0;\">\n                <div>\n                    <span class=\"ag-muted\">Total Stalled Tasks</span><br/>\n                    <span class=\"ag-metric\">{stalled_count}</span>\n                </div>\n                <div>\n                    <span class=\"ag-muted\">Status</span><br/>\n                    <span class=\"ag-badge {\"ag-badge-error\" if stalled_count > 0 else \"ag-badge-success\"}\">\n                        {\"Requires Action\" if stalled_count > 0 else \"On Track\"}\n                    </span>\n                </div>\n            </div>\n\n            <h3 class=\"ag-h3\">Stalled Tasks Detail</h3>\n            <table class=\"ag-table\">\n                <thead>\n                    <tr>\n                        <th>Step Name</th>\n                        <th>Milestone</th>\n                        <th>Status</th>\n                        <th>Due Date</th>\n                    </tr>\n                </thead>\n                <tbody>\n                    {table_rows}\n                </tbody>\n            </table>\n        </div>\n    </div>\n    \"\"\"\n    display(HTML(html_content))\n\nawait step_process_tasks_impl()\n",
+                "next_steps": []
+              }
+            ],
+            "pip_packages": [
+              "supabase",
+              "pandas",
+              "httpx"
+            ],
+            "integration_overrides": {}
+          }
+        }
+      ]
+    }
+  ],
+  "schedules": [],
+  "integrationsManifest": {
+    "services": [
+      "supabase"
+    ],
+    "envNames": [
+      "SUPABASE_KEY",
+      "SUPABASE_URL"
+    ]
+  }
+}

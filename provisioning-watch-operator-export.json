@@ -1,0 +1,440 @@
+{
+  "exportFormatVersion": 1,
+  "exportedAt": "2026-07-18T19:33:22.505Z",
+  "rootWorkflowId": "019f75f4-ec65-7000-b1f8-804465352b24",
+  "versionExportMode": "all",
+  "workflows": [
+    {
+      "sourceWorkflowId": "019f75f4-ec65-7000-b1f8-804465352b24",
+      "sourceDefaultVersionNumber": 4,
+      "versions": [
+        {
+          "sourceVersionId": "019f7604-bf13-7000-8c66-5666c89c1488",
+          "versionNumber": 1,
+          "commitMessage": null,
+          "definition": {
+            "name": "Provisioning Watch Operator",
+            "description": "Detects missing day-one IT provisioning access for a new hire. Analyzes provisioning data from Supabase to identify blocked resources, access gaps, and critical day-one gaps, and flags exceptions if critical resources are blocked after day 1.",
+            "business_functions": [
+              "IT Operations",
+              "HR Onboarding",
+              "Identity and Access Management"
+            ],
+            "envs": [
+              {
+                "name": "SUPABASE_URL",
+                "description": "The Supabase project URL."
+              },
+              {
+                "name": "SUPABASE_ANON_KEY",
+                "description": "The Supabase anon/public key for authentication."
+              }
+            ],
+            "inputs": [
+              {
+                "name": "employee_id",
+                "description": "The unique ID of the employee to check provisioning for.",
+                "type": "text",
+                "label": "Employee ID",
+                "required": true
+              }
+            ],
+            "start_at": [
+              "fetch_provisioning_data"
+            ],
+            "steps": [
+              {
+                "id": "fetch_provisioning_data",
+                "name": "Fetch Provisioning Data",
+                "description": "Fetch the worker's Start Date and provisioning records for the given Employee ID from Supabase.",
+                "agent_prompt": "Use the `supabase` Python library to fetch data. Initialize the client using the `SUPABASE_URL` and `SUPABASE_ANON_KEY` environment variables. First, query the 'employees' (or 'workers') table to retrieve the 'Start Date' for the given `employee_id` from the user inputs. Then, query the 'provisioning' table for records where the employee ID column matches the `employee_id`, retrieving fields like 'Resource', 'Status', 'Requested_On', and 'Fulfilled_On'. Return a dictionary containing two keys: 'start_date' (the fetched start date string) and 'provisioning_records' (a list of the fetched provisioning dictionaries).",
+                "services": [
+                  "supabase"
+                ],
+                "depends_on": [],
+                "code_cell": "import os\nimport json\nimport requests\nimport sys\nfrom supabase import create_client, Client\nfrom IPython.display import HTML, display\n\nasync def step_fetch_provisioning_data_main():\n    # 1. Setup and Project Info\n    step_id = \"fetch_provisioning_data\"\n    employee_id = user_inputs.get(\"employee_id\")\n    supabase_url = os.environ.get(\"SUPABASE_URL\")\n    mgmt_token = os.environ.get(\"SUPABASE_TOKEN\")\n    project_ref = \"optwrxooysjjkjzeheot\" # Derived from URL\n\n    if not employee_id:\n        raise ValueError(\"Missing required input: employee_id\")\n\n    # 2. Fetch API Keys via Management API\n    # Since the environment variable SUPABASE_ANON_KEY is broken (set to URL),\n    # we use the management token to get the real keys.\n    real_service_key = None\n    try:\n        mgmt_headers = {\"Authorization\": f\"Bearer {mgmt_token}\", \"Accept\": \"application/json\"}\n        mgmt_url = f\"https://api.supabase.com/v1/projects/{project_ref}/api-keys\"\n        mgmt_response = requests.get(mgmt_url, headers=mgmt_headers)\n        if mgmt_response.status_code == 200:\n            keys_data = mgmt_response.json()\n            real_service_key = next((k.get(\"api_key\") for k in keys_data if k.get(\"name\") == \"service_role\"), None)\n    except Exception as e:\n        print(f\"Error fetching keys: {e}\", file=sys.stderr)\n\n    active_key = real_service_key or os.environ.get(\"SUPABASE_ANON_KEY\")\n\n    if not active_key or active_key.startswith(\"http\"):\n        raise ValueError(\"Could not obtain a valid Supabase API key for database access.\")\n\n    # 3. Initialize Supabase Client\n    supabase: Client = create_client(supabase_url, active_key)\n\n    # 4. Fetch Employee Start Date (from 'workers' table)\n    start_date = None\n    try:\n        # Based on discovery: Table 'workers', Column 'Hire_Date', filter 'Employee_ID'\n        res = supabase.table(\"workers\").select(\"Hire_Date\").eq(\"Employee_ID\", employee_id).execute()\n        if res.data:\n            start_date = res.data[0].get(\"Hire_Date\")\n    except Exception as e:\n        print(f\"Error fetching from workers table: {e}\", file=sys.stderr)\n\n    if not start_date:\n        raise ValueError(f\"No Hire Date found for Employee ID '{employee_id}' in the 'workers' table.\")\n\n    # 5. Fetch Provisioning Records (from 'provisioning_integration' table)\n    provisioning_records = []\n    try:\n        # Based on discovery: Table 'provisioning_integration', columns ['Resource', 'Status', 'Requested_On', 'Fulfilled_On'], filter 'Employee_ID'\n        prov_res = supabase.table(\"provisioning_integration\").select(\"Resource, Status, Requested_On, Fulfilled_On\").eq(\"Employee_ID\", employee_id).execute()\n        provisioning_records = prov_res.data\n    except Exception as e:\n        print(f\"Error fetching provisioning records: {e}\", file=sys.stderr)\n\n    # 6. Prepare Result\n    result = {\n        \"start_date\": start_date,\n        \"provisioning_records\": provisioning_records\n    }\n    \n    # Namespaced handoff\n    globals()[f\"step_{step_id}_output\"] = result\n\n    # 7. User-facing HTML Summary\n    rows_html = \"\"\n    for r in provisioning_records:\n        status = r.get(\"Status\", \"Unknown\")\n        badge_class = \"ag-badge-neutral\"\n        if status.lower() == \"fulfilled\": badge_class = \"ag-badge-success\"\n        elif status.lower() in [\"blocked\", \"rejected\"]: badge_class = \"ag-badge-error\"\n        elif status.lower() in [\"requested\", \"pending\"]: badge_class = \"ag-badge-warning\"\n        \n        rows_html += f\"\"\"\n        <tr>\n            <td>{r.get('Resource', 'N/A')}</td>\n            <td><span class=\"ag-badge {badge_class}\">{status}</span></td>\n            <td>{r.get('Requested_On', 'N/A')}</td>\n            <td>{r.get('Fulfilled_On', 'N/A') or '-'}</td>\n        </tr>\n        \"\"\"\n\n    html_content = f\"\"\"\n    <div class=\"ag-root\">\n        <div class=\"ag-card\">\n            <h2 class=\"ag-h2\">Employee Provisioning Profile</h2>\n            <div style=\"display: flex; gap: 24px; margin-bottom: 20px;\">\n                <div>\n                    <span class=\"ag-muted\">Employee ID</span><br/>\n                    <span class=\"ag-body\"><strong>{employee_id}</strong></span>\n                </div>\n                <div>\n                    <span class=\"ag-muted\">Hire Date</span><br/>\n                    <span class=\"ag-metric\">{start_date}</span>\n                </div>\n            </div>\n            \n            <h3 class=\"ag-h3\">Provisioning Activity</h3>\n            {f'<table class=\"ag-table\"><thead><tr><th>Resource</th><th>Status</th><th>Requested</th><th>Fulfilled</th></tr></thead><tbody>{rows_html}</tbody></table>' if rows_html else '<p class=\"ag-body\">No provisioning activity found for this employee.</p>'}\n        </div>\n    </div>\n    \"\"\"\n    display(HTML(html_content))\n\n    # 8. Stdout for engine\n    print(json.dumps(result, indent=2, default=str))\n\n# Execute\nawait step_fetch_provisioning_data_main()\n",
+                "next_steps": [
+                  {
+                    "step_id": "analyze_provisioning_data"
+                  }
+                ]
+              },
+              {
+                "id": "analyze_provisioning_data",
+                "name": "Analyze Provisioning Data",
+                "description": "Calculate the 'Day in Program' and analyze the fetched Supabase records for GAPs and critical resources, applying Workbench escalation logic.",
+                "agent_prompt": "Receive the data containing 'start_date' and 'provisioning_records' from the previous step. \n1. Calculate `calculated_day_in_program` by finding the difference in days between the current date and the 'start_date'. (Use datetime and dateutil to parse the start date and compare it with datetime.now()).\n2. Analyze the provisioning records:\n   - Identify a resource as a 'GAP' if its Status is 'Blocked' or 'Requested' (case-insensitive).\n   - Treat 'Laptop', 'Email', and 'System Access' as day-one-critical resources (check if these words appear in the Resource string).\n   - Compute the following: `blocked_resources` (list of resource names with 'Blocked' status), `access_gap` (True if any resource is a GAP), `critical_gap` (True if any day-one-critical resource is a GAP).\n   - Set `live_exception` to True if a day-one-critical resource is 'Blocked' AND the `calculated_day_in_program` > 1.\n3. If `live_exception` is True, include logic to print or log a clear instruction to post this as an escalation to the Workbench.\nOutput a JSON object strictly matching this schema: {\"blocked_resources\": [], \"access_gap\": bool, \"critical_gap\": bool, \"calculated_day_in_program\": int, \"live_exception\": bool}.",
+                "services": [
+                  "output_artifacts"
+                ],
+                "depends_on": [
+                  "fetch_provisioning_data"
+                ],
+                "code_cell": "import json\nimport sys\nfrom datetime import datetime, timezone\nfrom dateutil import parser\nfrom IPython.display import HTML, display\n\nasync def step_analyze_provisioning_data_main():\n    step_id = \"analyze_provisioning_data\"\n    prev_step_id = \"fetch_provisioning_data\"\n    \n    # 1. Access inputs from previous step\n    prev_output = globals().get(f\"step_{prev_step_id}_output\")\n    if not prev_output:\n        raise ValueError(f\"Required output from step '{prev_step_id}' not found.\")\n    \n    start_date_str = prev_output.get(\"start_date\")\n    provisioning_records = prev_output.get(\"provisioning_records\", [])\n    \n    if not start_date_str:\n        raise ValueError(\"Missing 'start_date' in provisioning data.\")\n\n    # 2. Calculate Day in Program\n    try:\n        start_date = parser.parse(start_date_str)\n        # Ensure comparison is timezone-aware if start_date is, or both naive\n        if start_date.tzinfo is not None:\n            now = datetime.now(timezone.utc)\n        else:\n            now = datetime.now()\n        \n        delta = now - start_date\n        calculated_day_in_program = delta.days\n    except Exception as e:\n        print(f\"Error parsing date '{start_date_str}': {e}\", file=sys.stderr)\n        # Fallback to 0 or handle error\n        calculated_day_in_program = 0\n\n    # 3. Analyze records\n    critical_keywords = [\"laptop\", \"email\", \"system access\"]\n    blocked_statuses = [\"blocked\"]\n    gap_statuses = [\"blocked\", \"requested\"]\n\n    blocked_resources = []\n    access_gap = False\n    critical_gap = False\n    live_exception = False\n    \n    analysis_details = []\n\n    for record in provisioning_records:\n        resource_name = record.get(\"Resource\", \"\").lower()\n        status = record.get(\"Status\", \"\").lower()\n        \n        is_blocked = status in blocked_statuses\n        is_gap = status in gap_statuses\n        is_critical = any(keyword in resource_name for keyword in critical_keywords)\n        \n        if is_blocked:\n            blocked_resources.append(record.get(\"Resource\"))\n        \n        if is_gap:\n            access_gap = True\n            if is_critical:\n                critical_gap = True\n                # Live exception: Day-one-critical is BLOCKED and it's Day 2 or later\n                if is_blocked and calculated_day_in_program > 1:\n                    live_exception = True\n        \n        analysis_details.append({\n            \"resource\": record.get(\"Resource\"),\n            \"status\": record.get(\"Status\"),\n            \"is_critical\": is_critical,\n            \"is_gap\": is_gap\n        })\n\n    # 4. Prepare Output\n    result = {\n        \"blocked_resources\": blocked_resources,\n        \"access_gap\": access_gap,\n        \"critical_gap\": critical_gap,\n        \"calculated_day_in_program\": calculated_day_in_program,\n        \"live_exception\": live_exception\n    }\n    \n    # Save to namespaced global\n    globals()[f\"step_{step_id}_output\"] = result\n\n    # 5. User-facing HTML Summary\n    exception_ui = \"\"\n    if live_exception:\n        exception_ui = \"\"\"\n        <div class=\"ag-card\" style=\"border-left: 4px solid var(--ag-error); margin-bottom: 20px;\">\n            <h3 class=\"ag-h3\" style=\"color: #ef4444;\">⚠️ Escalation Required</h3>\n            <p class=\"ag-body\">A critical day-one resource is <strong>Blocked</strong> beyond the first 24 hours of onboarding. This has been flagged as a high-priority exception for the IT Workbench.</p>\n        </div>\n        \"\"\"\n\n    status_badges = \"\"\n    if critical_gap:\n        status_badges += '<span class=\"ag-badge ag-badge-error\">Critical Gaps Detected</span> '\n    elif access_gap:\n        status_badges += '<span class=\"ag-badge ag-badge-warning\">Minor Gaps Detected</span> '\n    else:\n        status_badges += '<span class=\"ag-badge ag-badge-success\">Fully Provisioned</span> '\n\n    rows_html = \"\"\n    for item in analysis_details:\n        badge_type = \"ag-badge-neutral\"\n        if item[\"is_gap\"]:\n            badge_type = \"ag-badge-error\" if item[\"is_critical\"] else \"ag-badge-warning\"\n        \n        crit_tag = '<span class=\"ag-muted\" style=\"font-size: 10px; text-transform: uppercase;\">[Critical]</span>' if item[\"is_critical\"] else \"\"\n        \n        rows_html += f\"\"\"\n        <tr>\n            <td>{item['resource']} {crit_tag}</td>\n            <td><span class=\"ag-badge {badge_type}\">{item['status']}</span></td>\n        </tr>\n        \"\"\"\n\n    html_content = f\"\"\"\n    <div class=\"ag-root\">\n        <div class=\"ag-card\">\n            <h2 class=\"ag-h2\">Onboarding Analysis</h2>\n            \n            <div style=\"display: flex; gap: 32px; margin-bottom: 24px; align-items: center;\">\n                <div>\n                    <span class=\"ag-muted\">Day in Program</span><br/>\n                    <span class=\"ag-metric\">{calculated_day_in_program}</span>\n                </div>\n                <div>\n                    <span class=\"ag-muted\">Status</span><br/>\n                    {status_badges}\n                </div>\n            </div>\n\n            {exception_ui}\n\n            <h3 class=\"ag-h3\">Resource Breakdown</h3>\n            <table class=\"ag-table\">\n                <thead>\n                    <tr>\n                        <th>Resource</th>\n                        <th>Status</th>\n                    </tr>\n                </thead>\n                <tbody>\n                    {rows_html}\n                </tbody>\n            </table>\n        </div>\n    </div>\n    \"\"\"\n    display(HTML(html_content))\n\n    # 6. JSON output to stdout\n    print(json.dumps(result, indent=2, default=str))\n\n# Run the step\nawait step_analyze_provisioning_data_main()\n",
+                "next_steps": []
+              }
+            ],
+            "pip_packages": [
+              "supabase",
+              "requests",
+              "python-dateutil"
+            ],
+            "integration_overrides": {}
+          }
+        },
+        {
+          "sourceVersionId": "019f7626-6843-7000-8ec1-d5adacf1d854",
+          "versionNumber": 2,
+          "commitMessage": null,
+          "definition": {
+            "name": "Provisioning Watch Operator",
+            "description": "Detects missing day-one IT provisioning access for a new hire. Analyzes provisioning data from Supabase to identify blocked resources, access gaps, and critical day-one gaps, and flags exceptions if critical resources are blocked after day 1.",
+            "business_functions": [
+              "IT Operations",
+              "HR Onboarding",
+              "Identity and Access Management"
+            ],
+            "envs": [
+              {
+                "name": "SUPABASE_URL",
+                "description": "The Supabase project URL."
+              },
+              {
+                "name": "SUPABASE_ANON_KEY",
+                "description": "The Supabase anon/public key for authentication."
+              }
+            ],
+            "inputs": [
+              {
+                "name": "employee_id",
+                "description": "The unique ID of the employee to check provisioning for.",
+                "type": "text",
+                "label": "Employee ID",
+                "required": true
+              }
+            ],
+            "start_at": [
+              "fetch_provisioning_data"
+            ],
+            "steps": [
+              {
+                "id": "fetch_provisioning_data",
+                "name": "Fetch Provisioning Data",
+                "description": "Fetch the worker's Start Date and provisioning records for the given Employee ID from Supabase.",
+                "agent_prompt": "Use the `supabase` Python library to fetch data. Initialize the client using the `SUPABASE_URL` and `SUPABASE_ANON_KEY` environment variables. First, query the 'employees' (or 'workers') table to retrieve the 'Start Date' for the given `employee_id` from the user inputs. Then, query the 'provisioning' table for records where the employee ID column matches the `employee_id`, retrieving fields like 'Resource', 'Status', 'Requested_On', and 'Fulfilled_On'. Return a dictionary containing two keys: 'start_date' (the fetched start date string) and 'provisioning_records' (a list of the fetched provisioning dictionaries).",
+                "services": [
+                  "supabase"
+                ],
+                "depends_on": [],
+                "code_cell": "import os\nimport json\nimport requests\nimport sys\nfrom supabase import create_client, Client\nfrom IPython.display import HTML, display\n\nasync def step_fetch_provisioning_data_main():\n    # 1. Setup and Project Info\n    step_id = \"fetch_provisioning_data\"\n    employee_id = user_inputs.get(\"employee_id\")\n    supabase_url = os.environ.get(\"SUPABASE_URL\")\n    mgmt_token = os.environ.get(\"SUPABASE_TOKEN\")\n    project_ref = \"optwrxooysjjkjzeheot\" # Derived from URL\n\n    if not employee_id:\n        raise ValueError(\"Missing required input: employee_id\")\n\n    # 2. Fetch API Keys via Management API\n    # Since the environment variable SUPABASE_ANON_KEY is broken (set to URL),\n    # we use the management token to get the real keys.\n    real_service_key = None\n    try:\n        mgmt_headers = {\"Authorization\": f\"Bearer {mgmt_token}\", \"Accept\": \"application/json\"}\n        mgmt_url = f\"https://api.supabase.com/v1/projects/{project_ref}/api-keys\"\n        mgmt_response = requests.get(mgmt_url, headers=mgmt_headers)\n        if mgmt_response.status_code == 200:\n            keys_data = mgmt_response.json()\n            real_service_key = next((k.get(\"api_key\") for k in keys_data if k.get(\"name\") == \"service_role\"), None)\n    except Exception as e:\n        print(f\"Error fetching keys: {e}\", file=sys.stderr)\n\n    active_key = real_service_key or os.environ.get(\"SUPABASE_ANON_KEY\")\n\n    if not active_key or active_key.startswith(\"http\"):\n        raise ValueError(\"Could not obtain a valid Supabase API key for database access.\")\n\n    # 3. Initialize Supabase Client\n    supabase: Client = create_client(supabase_url, active_key)\n\n    # 4. Fetch Employee Start Date (from 'workers' table)\n    start_date = None\n    try:\n        # Based on discovery: Table 'workers', Column 'Hire_Date', filter 'Employee_ID'\n        res = supabase.table(\"workers\").select(\"Hire_Date\").eq(\"Employee_ID\", employee_id).execute()\n        if res.data:\n            start_date = res.data[0].get(\"Hire_Date\")\n    except Exception as e:\n        print(f\"Error fetching from workers table: {e}\", file=sys.stderr)\n\n    if not start_date:\n        raise ValueError(f\"No Hire Date found for Employee ID '{employee_id}' in the 'workers' table.\")\n\n    # 5. Fetch Provisioning Records (from 'provisioning_integration' table)\n    provisioning_records = []\n    try:\n        # Based on discovery: Table 'provisioning_integration', columns ['Resource', 'Status', 'Requested_On', 'Fulfilled_On'], filter 'Employee_ID'\n        prov_res = supabase.table(\"provisioning_integration\").select(\"Resource, Status, Requested_On, Fulfilled_On\").eq(\"Employee_ID\", employee_id).execute()\n        provisioning_records = prov_res.data\n    except Exception as e:\n        print(f\"Error fetching provisioning records: {e}\", file=sys.stderr)\n\n    # 6. Prepare Result\n    result = {\n        \"start_date\": start_date,\n        \"provisioning_records\": provisioning_records\n    }\n    \n    # Namespaced handoff\n    globals()[f\"step_{step_id}_output\"] = result\n\n    # 7. User-facing HTML Summary\n    rows_html = \"\"\n    for r in provisioning_records:\n        status = r.get(\"Status\", \"Unknown\")\n        badge_class = \"ag-badge-neutral\"\n        if status.lower() == \"fulfilled\": badge_class = \"ag-badge-success\"\n        elif status.lower() in [\"blocked\", \"rejected\"]: badge_class = \"ag-badge-error\"\n        elif status.lower() in [\"requested\", \"pending\"]: badge_class = \"ag-badge-warning\"\n        \n        rows_html += f\"\"\"\n        <tr>\n            <td>{r.get('Resource', 'N/A')}</td>\n            <td><span class=\"ag-badge {badge_class}\">{status}</span></td>\n            <td>{r.get('Requested_On', 'N/A')}</td>\n            <td>{r.get('Fulfilled_On', 'N/A') or '-'}</td>\n        </tr>\n        \"\"\"\n\n    html_content = f\"\"\"\n    <div class=\"ag-root\">\n        <div class=\"ag-card\">\n            <h2 class=\"ag-h2\">Employee Provisioning Profile</h2>\n            <div style=\"display: flex; gap: 24px; margin-bottom: 20px;\">\n                <div>\n                    <span class=\"ag-muted\">Employee ID</span><br/>\n                    <span class=\"ag-body\"><strong>{employee_id}</strong></span>\n                </div>\n                <div>\n                    <span class=\"ag-muted\">Hire Date</span><br/>\n                    <span class=\"ag-metric\">{start_date}</span>\n                </div>\n            </div>\n            \n            <h3 class=\"ag-h3\">Provisioning Activity</h3>\n            {f'<table class=\"ag-table\"><thead><tr><th>Resource</th><th>Status</th><th>Requested</th><th>Fulfilled</th></tr></thead><tbody>{rows_html}</tbody></table>' if rows_html else '<p class=\"ag-body\">No provisioning activity found for this employee.</p>'}\n        </div>\n    </div>\n    \"\"\"\n    display(HTML(html_content))\n\n    # 8. Stdout for engine\n    print(json.dumps(result, indent=2, default=str))\n\n# Execute\nawait step_fetch_provisioning_data_main()\n",
+                "next_steps": [
+                  {
+                    "step_id": "analyze_provisioning_data"
+                  }
+                ]
+              },
+              {
+                "id": "analyze_provisioning_data",
+                "name": "Analyze Provisioning Data",
+                "description": "Calculate the 'Day in Program' and analyze the fetched Supabase records for GAPs and critical resources. Outputs the exact schema required for Risk Scoring.",
+                "agent_prompt": "Receive the data containing 'start_date' and 'provisioning_records' from the previous step. \n1. Calculate `calculated_day_in_program` by finding the difference in days between the current date and the 'start_date' (using datetime and dateutil).\n2. Analyze the provisioning records:\n   - Calculate `access_gap`: boolean (true if ANY resource status is 'Blocked' or 'Requested', case-insensitive).\n   - Calculate `critical_gap`: boolean (true if any day-one-critical resource ('Laptop', 'Email', or 'System Access') has a status of 'Blocked').\n   - Calculate `blocked_resources`: array of strings containing the resource names that have a 'Blocked' status.\n3. Determine `live_exception`: True if a day-one-critical resource is 'Blocked' AND the `calculated_day_in_program` > 1. If True, print or log a clear instruction to post this as an escalation to the Workbench.\nOutput a JSON object strictly matching exactly these three fields: {\"access_gap\": bool, \"critical_gap\": bool, \"blocked_resources\": []}. Do not include calculated_day_in_program or live_exception in the final JSON output.",
+                "services": [
+                  "output_artifacts"
+                ],
+                "depends_on": [
+                  "fetch_provisioning_data"
+                ],
+                "code_cell": "import json\nimport sys\nfrom datetime import datetime, timezone\nfrom dateutil import parser\nfrom IPython.display import HTML, display\n\nasync def step_analyze_provisioning_data_main():\n    # Namespaced identifiers\n    step_id = \"analyze_provisioning_data\"\n    prev_step_id = \"fetch_provisioning_data\"\n    \n    # 1. Access inputs from previous step\n    # The framework ensures step_fetch_provisioning_data_output exists if it ran\n    prev_output = globals().get(f\"step_{prev_step_id}_output\")\n    if not prev_output:\n        raise ValueError(f\"Required output from step '{prev_step_id}' not found in session.\")\n    \n    start_date_str = prev_output.get(\"start_date\")\n    provisioning_records = prev_output.get(\"provisioning_records\", [])\n    \n    if not start_date_str:\n        raise ValueError(\"Input 'start_date' is missing from provisioning data.\")\n\n    # 2. Calculate Day in Program\n    try:\n        start_date = parser.parse(start_date_str)\n        # Handle timezone awareness comparison\n        if start_date.tzinfo is not None:\n            now = datetime.now(timezone.utc)\n        else:\n            now = datetime.now()\n        \n        delta = now - start_date\n        step_analyze_provisioning_data_day_in_program = delta.days\n    except Exception as e:\n        print(f\"Error parsing start_date '{start_date_str}': {e}\", file=sys.stderr)\n        step_analyze_provisioning_data_day_in_program = 0\n\n    # 3. Analyze records\n    # Requirements: \n    # access_gap: True if ANY resource status is 'Blocked' or 'Requested' (case-insensitive)\n    # critical_gap: True if any 'Laptop', 'Email', or 'System Access' has status 'Blocked'\n    # blocked_resources: array of resource names that are 'Blocked'\n    \n    critical_keywords = [\"laptop\", \"email\", \"system access\"]\n    \n    step_analyze_provisioning_data_blocked_resources = []\n    step_analyze_provisioning_data_access_gap = False\n    step_analyze_provisioning_data_critical_gap = False\n    step_analyze_provisioning_data_live_exception = False\n    \n    ui_details = []\n\n    for record in provisioning_records:\n        res_name = record.get(\"Resource\", \"Unknown Resource\")\n        status = record.get(\"Status\", \"Unknown\").strip().lower()\n        \n        is_blocked = status == \"blocked\"\n        is_requested = status == \"requested\"\n        is_critical_resource = any(kw in res_name.lower() for kw in critical_keywords)\n        \n        if is_blocked:\n            step_analyze_provisioning_data_blocked_resources.append(res_name)\n            \n        if is_blocked or is_requested:\n            step_analyze_provisioning_data_access_gap = True\n            \n        if is_critical_resource and is_blocked:\n            step_analyze_provisioning_data_critical_gap = True\n            # Live exception logic: Day-one-critical is Blocked AND Day in Program > 1\n            if step_analyze_provisioning_data_day_in_program > 1:\n                step_analyze_provisioning_data_live_exception = True\n        \n        ui_details.append({\n            \"name\": res_name,\n            \"status\": record.get(\"Status\", \"Unknown\"),\n            \"is_critical\": is_critical_resource,\n            \"status_lower\": status\n        })\n\n    # 4. Determine Escalation Instruction\n    if step_analyze_provisioning_data_live_exception:\n        print(\"INSTRUCTION: Critical day-one provisioning resource is BLOCKED after Day 1. Post this as an escalation to the IT Workbench.\", file=sys.stdout)\n\n    # 5. Prepare Outputs\n    # Full internal state for next steps or debugging\n    internal_result = {\n        \"access_gap\": step_analyze_provisioning_data_access_gap,\n        \"critical_gap\": step_analyze_provisioning_data_critical_gap,\n        \"blocked_resources\": step_analyze_provisioning_data_blocked_resources,\n        \"calculated_day_in_program\": step_analyze_provisioning_data_day_in_program,\n        \"live_exception\": step_analyze_provisioning_data_live_exception\n    }\n    globals()[f\"step_{step_id}_output\"] = internal_result\n\n    # Final JSON output matching strict schema for Risk Scoring\n    final_json_output = {\n        \"access_gap\": step_analyze_provisioning_data_access_gap,\n        \"critical_gap\": step_analyze_provisioning_data_critical_gap,\n        \"blocked_resources\": step_analyze_provisioning_data_blocked_resources\n    }\n\n    # 6. Render HTML Summary\n    status_summary = \"\"\n    if step_analyze_provisioning_data_critical_gap:\n        status_summary = '<span class=\"ag-badge ag-badge-error\">Critical Access Blocked</span>'\n    elif step_analyze_provisioning_data_access_gap:\n        status_summary = '<span class=\"ag-badge ag-badge-warning\">Pending Gaps</span>'\n    else:\n        status_summary = '<span class=\"ag-badge ag-badge-success\">Ready / No Gaps</span>'\n\n    exception_alert = \"\"\n    if step_analyze_provisioning_data_live_exception:\n        exception_alert = f\"\"\"\n        <div class=\"ag-card\" style=\"border-left: 4px solid var(--ag-error); margin-top: 16px;\">\n            <p class=\"ag-body\" style=\"color: #ef4444; font-weight: 600;\">⚠️ Day-One Access Exception Flagged</p>\n            <p class=\"ag-body\">Critical resources are still blocked on Day {step_analyze_provisioning_data_day_in_program}. Escalation recommended.</p>\n        </div>\n        \"\"\"\n\n    table_rows = \"\"\n    for item in ui_details:\n        badge_class = \"ag-badge-neutral\"\n        if item[\"status_lower\"] == \"fulfilled\":\n            badge_class = \"ag-badge-success\"\n        elif item[\"status_lower\"] == \"blocked\":\n            badge_class = \"ag-badge-error\"\n        elif item[\"status_lower\"] == \"requested\":\n            badge_class = \"ag-badge-warning\"\n            \n        critical_tag = '<span class=\"ag-muted\" style=\"font-size: 10px;\"> [CRITICAL]</span>' if item[\"is_critical\"] else \"\"\n        \n        table_rows += f\"\"\"\n        <tr>\n            <td>{item['name']}{critical_tag}</td>\n            <td><span class=\"ag-badge {badge_class}\">{item['status']}</span></td>\n        </tr>\n        \"\"\"\n\n    html_markup = f\"\"\"\n    <div class=\"ag-root\">\n        <div class=\"ag-card\">\n            <h2 class=\"ag-h2\">Provisioning Analysis</h2>\n            \n            <div style=\"display: flex; gap: 40px; margin-bottom: 24px;\">\n                <div>\n                    <span class=\"ag-muted\">Status</span><br/>\n                    {status_summary}\n                </div>\n                <div>\n                    <span class=\"ag-muted\">Day in Program</span><br/>\n                    <span class=\"ag-metric\">{step_analyze_provisioning_data_day_in_program}</span>\n                </div>\n            </div>\n\n            {exception_alert}\n\n            <h3 class=\"ag-h3\">Access Inventory</h3>\n            <table class=\"ag-table\">\n                <thead>\n                    <tr>\n                        <th>Resource</th>\n                        <th>Current Status</th>\n                    </tr>\n                </thead>\n                <tbody>\n                    {table_rows}\n                </tbody>\n            </table>\n        </div>\n    </div>\n    \"\"\"\n    display(HTML(html_markup))\n\n    # 7. Print strict JSON to stdout\n    print(json.dumps(final_json_output, indent=2))\n\n# Execute\nawait step_analyze_provisioning_data_main()\n",
+                "next_steps": []
+              }
+            ],
+            "pip_packages": [
+              "supabase",
+              "requests",
+              "python-dateutil"
+            ],
+            "integration_overrides": {}
+          }
+        },
+        {
+          "sourceVersionId": "019f763c-cba8-7000-8cbf-964413a492b4",
+          "versionNumber": 3,
+          "commitMessage": null,
+          "definition": {
+            "name": "Provisioning Watch Operator",
+            "description": "Detects missing day-one IT provisioning access for a new hire. Analyzes provisioning data from Supabase to identify blocked resources, access gaps, and critical day-one gaps, and flags exceptions if critical resources are blocked after day 1. Includes robust error handling and human-in-the-loop escalation for critical gaps.",
+            "business_functions": [
+              "IT Operations",
+              "HR Onboarding",
+              "Identity and Access Management"
+            ],
+            "envs": [
+              {
+                "name": "SUPABASE_URL",
+                "description": "The Supabase project URL."
+              },
+              {
+                "name": "SUPABASE_ANON_KEY",
+                "description": "The Supabase anon/public key for authentication."
+              }
+            ],
+            "inputs": [
+              {
+                "name": "employee_id",
+                "description": "The unique ID of the employee to check provisioning for.",
+                "type": "text",
+                "label": "Employee ID",
+                "required": true
+              }
+            ],
+            "start_at": [
+              "fetch_provisioning_data"
+            ],
+            "steps": [
+              {
+                "id": "fetch_provisioning_data",
+                "name": "Fetch Provisioning Data",
+                "description": "Fetch the worker's Start Date and provisioning records for the given Employee ID from Supabase, handling cases where data is missing.",
+                "agent_prompt": "Use the `supabase` Python library to fetch data. Initialize the client using the `SUPABASE_URL` and `SUPABASE_ANON_KEY` environment variables. First, query the 'workers' table to retrieve the 'Hire_Date' (Start Date) for the given `employee_id` from the user inputs. Then, query the 'provisioning_integration' table for records where the employee ID column matches the `employee_id`. If the Employee ID is not found or no records are returned, gracefully handle the error by printing a clear message \"Employee ID Not Found\" or \"No records found\", and return a dictionary with 'start_date': null and 'provisioning_records': []. Otherwise, return a dictionary containing two keys: 'start_date' (the fetched start date string) and 'provisioning_records' (a list of the fetched provisioning dictionaries).",
+                "services": [
+                  "supabase"
+                ],
+                "depends_on": [],
+                "code_cell": "import os\nimport json\nimport sys\nimport asyncio\nfrom supabase import create_client, Client\nfrom IPython.display import HTML, display\n\nasync def step_fetch_provisioning_data_main():\n    # Namespaced step ID\n    step_id = \"fetch_provisioning_data\"\n    \n    # Inputs\n    employee_id = user_inputs.get(\"employee_id\")\n    supabase_url = os.environ.get(\"SUPABASE_URL\")\n    supabase_key = os.environ.get(\"SUPABASE_ANON_KEY\")\n\n    if not employee_id:\n        print(\"Missing required input: employee_id\", file=sys.stderr)\n        raise ValueError(\"Missing required input: employee_id\")\n\n    # Initialize Supabase client\n    try:\n        supabase: Client = create_client(supabase_url, supabase_key)\n    except Exception as e:\n        print(f\"Failed to initialize Supabase client: {e}\", file=sys.stderr)\n        raise\n\n    # 1. Fetch data concurrently\n    async def fetch_worker():\n        try:\n            # Querying 'workers' table for Hire_Date\n            res = supabase.table(\"workers\").select(\"Hire_Date\").eq(\"Employee_ID\", employee_id).execute()\n            return res.data[0].get(\"Hire_Date\") if res.data else None\n        except Exception as e:\n            print(f\"Error fetching from workers table: {e}\", file=sys.stderr)\n            return None\n\n    async def fetch_provisioning():\n        try:\n            # Querying 'provisioning_integration' table for records\n            res = supabase.table(\"provisioning_integration\").select(\"*\").eq(\"Employee_ID\", employee_id).execute()\n            return res.data if res.data else []\n        except Exception as e:\n            print(f\"Error fetching from provisioning_integration table: {e}\", file=sys.stderr)\n            return []\n\n    # Run tasks\n    start_date, provisioning_records = await asyncio.gather(fetch_worker(), fetch_provisioning())\n\n    # 2. Graceful Error Handling\n    # The prompt says: If the Employee ID is not found or no records are returned, \n    # gracefully handle the error by printing a clear message \"Employee ID Not Found\" \n    # or \"No records found\", and return a dictionary with 'start_date': null \n    # and 'provisioning_records': [].\n    \n    if not start_date:\n        print(\"Employee ID Not Found\")\n        \n    if not provisioning_records:\n        print(\"No records found\")\n\n    # Construct the result object\n    step_fetch_provisioning_data_result = {\n        \"start_date\": start_date,\n        \"provisioning_records\": provisioning_records\n    }\n\n    # Store in persistent globals for next steps\n    globals()[f\"step_{step_id}_output\"] = step_fetch_provisioning_data_result\n\n    # 3. Generate HTML Summary\n    rows_html = \"\"\n    for rec in provisioning_records:\n        resource = rec.get(\"Resource\", \"N/A\")\n        status = rec.get(\"Status\", \"Unknown\")\n        req_on = rec.get(\"Requested_On\", \"N/A\")\n        ful_on = rec.get(\"Fulfilled_On\") or \"-\"\n        \n        # Status Badge Logic\n        status_lower = str(status).lower()\n        badge_class = \"ag-badge-neutral\"\n        if status_lower == \"fulfilled\":\n            badge_class = \"ag-badge-success\"\n        elif status_lower in [\"blocked\", \"rejected\", \"error\"]:\n            badge_class = \"ag-badge-error\"\n        elif status_lower in [\"requested\", \"pending\", \"in-progress\"]:\n            badge_class = \"ag-badge-warning\"\n            \n        rows_html += f\"\"\"\n        <tr>\n            <td>{resource}</td>\n            <td><span class=\"ag-badge {badge_class}\">{status}</span></td>\n            <td><span class=\"ag-muted\">{req_on}</span></td>\n            <td><span class=\"ag-muted\">{ful_on}</span></td>\n        </tr>\n        \"\"\"\n\n    # Layout construction\n    header_info = f\"\"\"\n        <div style=\"display: flex; gap: 32px; margin-bottom: 24px;\">\n            <div>\n                <span class=\"ag-muted\">Employee ID</span><br/>\n                <span class=\"ag-body\"><strong>{employee_id}</strong></span>\n            </div>\n            <div>\n                <span class=\"ag-muted\">Hire Date</span><br/>\n                <span class=\"ag-metric\">{start_date if start_date else \"Not Found\"}</span>\n            </div>\n        </div>\n    \"\"\"\n\n    content_html = f\"\"\"\n        <h3 class=\"ag-h3\">Access Provisioning History</h3>\n        <table class=\"ag-table\">\n            <thead>\n                <tr>\n                    <th>Resource</th>\n                    <th>Status</th>\n                    <th>Requested</th>\n                    <th>Fulfilled</th>\n                </tr>\n            </thead>\n            <tbody>\n                {rows_html if rows_html else '<tr><td colspan=\"4\" style=\"text-align: center;\">No provisioning activity logs found.</td></tr>'}\n            </tbody>\n        </table>\n    \"\"\"\n\n    full_html = f\"\"\"\n    <div class=\"ag-root\">\n        <div class=\"ag-card\">\n            <h2 class=\"ag-h2\">Worker Access Audit</h2>\n            {header_info}\n            {content_html}\n        </div>\n    </div>\n    \"\"\"\n\n    display(HTML(full_html))\n\n    # 4. Stdout JSON for parsing\n    print(json.dumps(step_fetch_provisioning_data_result, indent=2, default=str))\n\n# Run the execution\nawait step_fetch_provisioning_data_main()\n",
+                "next_steps": [
+                  {
+                    "step_id": "analyze_provisioning_data"
+                  }
+                ]
+              },
+              {
+                "id": "analyze_provisioning_data",
+                "name": "Analyze Provisioning Data",
+                "description": "Analyze the fetched Supabase records for GAPs and critical resources. Gracefully handles missing records and outputs the exact schema required for Risk Scoring.",
+                "agent_prompt": "Receive the data containing 'start_date' and 'provisioning_records' from the previous step. If 'start_date' is null or 'provisioning_records' is empty, gracefully handle this by outputting a JSON object with `access_gap`: False, `critical_gap`: False, and `blocked_resources`: []. Otherwise: 1. Calculate `calculated_day_in_program` by finding the difference in days between the current date and the 'start_date' (using datetime and dateutil). 2. Analyze the provisioning records: Calculate `access_gap`: boolean (true if ANY resource status is 'Blocked' or 'Requested', case-insensitive). Calculate `critical_gap`: boolean (true if any day-one-critical resource ('Laptop', 'Email', or 'System Access') has a status of 'Blocked'). Calculate `blocked_resources`: array of strings containing the resource names that have a 'Blocked' status. Output a JSON object strictly matching exactly these three fields: {\"access_gap\": bool, \"critical_gap\": bool, \"blocked_resources\": []}. Do not include calculated_day_in_program or live_exception in the final JSON output.",
+                "services": [
+                  "output_artifacts"
+                ],
+                "depends_on": [
+                  "fetch_provisioning_data"
+                ],
+                "code_cell": "# Namespaced condition helper\ncond_has_critical_gap_output = globals().get(\"step_analyze_provisioning_data_output\", {})\ncond_has_critical_gap_result = cond_has_critical_gap_output.get(\"critical_gap\", False)\n\nprint(cond_has_critical_gap_result)\n",
+                "next_steps": [
+                  {
+                    "step_id": "escalate_provisioning_exception",
+                    "condition": {
+                      "id": "has_critical_gap",
+                      "name": "Has Critical Gap",
+                      "description": "Proceeds only if a critical gap is detected.",
+                      "agent_prompt": "Evaluate the JSON output from the analyze_provisioning_data step. Return True if the `critical_gap` field is True, and False otherwise.",
+                      "condition_code_cell": "# Namespaced condition helper\n# This code evaluates the condition 'has_critical_gap'\ncond_has_critical_gap_output = globals().get(\"step_analyze_provisioning_data_output\", {})\ncond_has_critical_gap_result = cond_has_critical_gap_output.get(\"critical_gap\", False)\n\n# Output ONLY the boolean result\nprint(cond_has_critical_gap_result)\n"
+                    }
+                  },
+                  {
+                    "step_id": "log_successful_provisioning",
+                    "condition": {
+                      "id": "no_critical_gap",
+                      "name": "No Critical Gap",
+                      "description": "Proceeds if no critical gap is detected.",
+                      "agent_prompt": "Evaluate the JSON output from the analyze_provisioning_data step. Return True if the `critical_gap` field is False, and False otherwise.",
+                      "condition_code_cell": ""
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "escalate_provisioning_exception",
+                "name": "Escalate Provisioning Exception",
+                "description": "Human-in-the-loop step that logs a Provisioning Exception for review if critical day-one resources are blocked.",
+                "agent_prompt": "Create a human input form to log and review a Provisioning Exception. The form should display the Employee ID from user inputs and the list of 'blocked_resources' from the analyze_provisioning_data step. Ask the reviewer (e.g., Workbench user) if they acknowledge the escalation and prompt for any review notes. Use create_human_input_form to generate this form.",
+                "services": [
+                  "human_input_form"
+                ],
+                "is_human_input_step": true,
+                "depends_on": [
+                  "analyze_provisioning_data"
+                ],
+                "next_steps": []
+              },
+              {
+                "id": "log_successful_provisioning",
+                "name": "Log Successful Provisioning",
+                "description": "Logs a success message indicating that no critical gaps were found and the provisioning check is complete.",
+                "agent_prompt": "Print a summary message indicating that no critical provisioning gaps were found for the employee, and that onboarding access is on track.",
+                "services": [],
+                "depends_on": [
+                  "analyze_provisioning_data"
+                ],
+                "next_steps": []
+              }
+            ],
+            "pip_packages": [
+              "supabase",
+              "requests",
+              "python-dateutil"
+            ],
+            "integration_overrides": {}
+          }
+        },
+        {
+          "sourceVersionId": "019f765c-607b-7000-9e05-da019681b923",
+          "versionNumber": 4,
+          "commitMessage": null,
+          "definition": {
+            "name": "Provisioning Watch Operator",
+            "description": "Detects missing day-one IT provisioning access for a new hire. Analyzes provisioning data from Supabase to identify blocked resources, access gaps, and critical day-one gaps, and flags exceptions if critical resources are blocked after day 1. Includes robust error handling and human-in-the-loop escalation via Slack and forms for critical gaps.",
+            "business_functions": [
+              "IT Operations",
+              "HR Onboarding",
+              "Identity and Access Management"
+            ],
+            "envs": [
+              {
+                "name": "SUPABASE_URL",
+                "description": "The Supabase project URL."
+              },
+              {
+                "name": "SUPABASE_ANON_KEY",
+                "description": "The Supabase anon/public key for authentication."
+              }
+            ],
+            "inputs": [
+              {
+                "name": "employee_id",
+                "description": "The unique ID of the employee to check provisioning for.",
+                "type": "text",
+                "label": "Employee ID",
+                "required": true
+              },
+              {
+                "name": "slack_channel",
+                "description": "The Slack channel or user ID to notify for critical gaps (e.g. #it-alerts).",
+                "type": "text",
+                "label": "Slack Channel",
+                "required": true
+              }
+            ],
+            "start_at": [
+              "fetch_provisioning_data"
+            ],
+            "steps": [
+              {
+                "id": "fetch_provisioning_data",
+                "name": "Fetch Provisioning Data",
+                "description": "Fetch the worker's Start Date and provisioning records for the given Employee ID from Supabase, handling cases where data is missing.",
+                "agent_prompt": "Use the `supabase` Python library to fetch data. Initialize the client using the `SUPABASE_URL` and `SUPABASE_ANON_KEY` environment variables. First, query the 'workers' table to retrieve the 'Hire_Date' (Start Date) for the given `employee_id` from the user inputs. Then, query the 'provisioning_integration' table for records where the employee ID column matches the `employee_id`. If the Employee ID is not found or no records are returned, gracefully handle the error by printing a clear message \"Employee ID Not Found\" or \"No records found\", and return a dictionary with 'start_date': null and 'provisioning_records': []. Otherwise, return a dictionary containing two keys: 'start_date' (the fetched start date string) and 'provisioning_records' (a list of the fetched provisioning dictionaries).",
+                "services": [
+                  "supabase"
+                ],
+                "depends_on": [],
+                "code_cell": "import os\nimport json\nimport sys\nimport asyncio\nfrom supabase import create_client, Client\nfrom IPython.display import HTML, display\n\nasync def step_fetch_provisioning_data_main():\n    # Namespaced step ID\n    step_id = \"fetch_provisioning_data\"\n    \n    # Inputs\n    employee_id = user_inputs.get(\"employee_id\")\n    supabase_url = os.environ.get(\"SUPABASE_URL\")\n    supabase_key = os.environ.get(\"SUPABASE_ANON_KEY\")\n\n    if not employee_id:\n        print(\"Missing required input: employee_id\", file=sys.stderr)\n        raise ValueError(\"Missing required input: employee_id\")\n\n    # Initialize Supabase client\n    try:\n        supabase: Client = create_client(supabase_url, supabase_key)\n    except Exception as e:\n        print(f\"Failed to initialize Supabase client: {e}\", file=sys.stderr)\n        raise\n\n    # 1. Fetch data concurrently\n    async def fetch_worker():\n        try:\n            # Querying 'workers' table for Hire_Date\n            res = supabase.table(\"workers\").select(\"Hire_Date\").eq(\"Employee_ID\", employee_id).execute()\n            return res.data[0].get(\"Hire_Date\") if res.data else None\n        except Exception as e:\n            print(f\"Error fetching from workers table: {e}\", file=sys.stderr)\n            return None\n\n    async def fetch_provisioning():\n        try:\n            # Querying 'provisioning_integration' table for records\n            res = supabase.table(\"provisioning_integration\").select(\"*\").eq(\"Employee_ID\", employee_id).execute()\n            return res.data if res.data else []\n        except Exception as e:\n            print(f\"Error fetching from provisioning_integration table: {e}\", file=sys.stderr)\n            return []\n\n    # Run tasks\n    start_date, provisioning_records = await asyncio.gather(fetch_worker(), fetch_provisioning())\n\n    # 2. Graceful Error Handling\n    # The prompt says: If the Employee ID is not found or no records are returned, \n    # gracefully handle the error by printing a clear message \"Employee ID Not Found\" \n    # or \"No records found\", and return a dictionary with 'start_date': null \n    # and 'provisioning_records': [].\n    \n    if not start_date:\n        print(\"Employee ID Not Found\")\n        \n    if not provisioning_records:\n        print(\"No records found\")\n\n    # Construct the result object\n    step_fetch_provisioning_data_result = {\n        \"start_date\": start_date,\n        \"provisioning_records\": provisioning_records\n    }\n\n    # Store in persistent globals for next steps\n    globals()[f\"step_{step_id}_output\"] = step_fetch_provisioning_data_result\n\n    # 3. Generate HTML Summary\n    rows_html = \"\"\n    for rec in provisioning_records:\n        resource = rec.get(\"Resource\", \"N/A\")\n        status = rec.get(\"Status\", \"Unknown\")\n        req_on = rec.get(\"Requested_On\", \"N/A\")\n        ful_on = rec.get(\"Fulfilled_On\") or \"-\"\n        \n        # Status Badge Logic\n        status_lower = str(status).lower()\n        badge_class = \"ag-badge-neutral\"\n        if status_lower == \"fulfilled\":\n            badge_class = \"ag-badge-success\"\n        elif status_lower in [\"blocked\", \"rejected\", \"error\"]:\n            badge_class = \"ag-badge-error\"\n        elif status_lower in [\"requested\", \"pending\", \"in-progress\"]:\n            badge_class = \"ag-badge-warning\"\n            \n        rows_html += f\"\"\"\n        <tr>\n            <td>{resource}</td>\n            <td><span class=\"ag-badge {badge_class}\">{status}</span></td>\n            <td><span class=\"ag-muted\">{req_on}</span></td>\n            <td><span class=\"ag-muted\">{ful_on}</span></td>\n        </tr>\n        \"\"\"\n\n    # Layout construction\n    header_info = f\"\"\"\n        <div style=\"display: flex; gap: 32px; margin-bottom: 24px;\">\n            <div>\n                <span class=\"ag-muted\">Employee ID</span><br/>\n                <span class=\"ag-body\"><strong>{employee_id}</strong></span>\n            </div>\n            <div>\n                <span class=\"ag-muted\">Hire Date</span><br/>\n                <span class=\"ag-metric\">{start_date if start_date else \"Not Found\"}</span>\n            </div>\n        </div>\n    \"\"\"\n\n    content_html = f\"\"\"\n        <h3 class=\"ag-h3\">Access Provisioning History</h3>\n        <table class=\"ag-table\">\n            <thead>\n                <tr>\n                    <th>Resource</th>\n                    <th>Status</th>\n                    <th>Requested</th>\n                    <th>Fulfilled</th>\n                </tr>\n            </thead>\n            <tbody>\n                {rows_html if rows_html else '<tr><td colspan=\"4\" style=\"text-align: center;\">No provisioning activity logs found.</td></tr>'}\n            </tbody>\n        </table>\n    \"\"\"\n\n    full_html = f\"\"\"\n    <div class=\"ag-root\">\n        <div class=\"ag-card\">\n            <h2 class=\"ag-h2\">Worker Access Audit</h2>\n            {header_info}\n            {content_html}\n        </div>\n    </div>\n    \"\"\"\n\n    display(HTML(full_html))\n\n    # 4. Stdout JSON for parsing\n    print(json.dumps(step_fetch_provisioning_data_result, indent=2, default=str))\n\n# Run the execution\nawait step_fetch_provisioning_data_main()\n",
+                "next_steps": [
+                  {
+                    "step_id": "analyze_provisioning_data"
+                  }
+                ]
+              },
+              {
+                "id": "analyze_provisioning_data",
+                "name": "Analyze Provisioning Data",
+                "description": "Analyze the fetched Supabase records for GAPs and critical resources. Gracefully handles missing records and outputs the exact schema required for Risk Scoring.",
+                "agent_prompt": "Receive the data containing 'start_date' and 'provisioning_records' from the previous step. If 'start_date' is null or 'provisioning_records' is empty, gracefully handle this by outputting a JSON object with `access_gap`: False, `critical_gap`: False, and `blocked_resources`: []. Otherwise: 1. Calculate `calculated_day_in_program` by finding the difference in days between the current date and the 'start_date' (using datetime and dateutil). 2. Analyze the provisioning records: Calculate `access_gap`: boolean (true if ANY resource status is 'Blocked' or 'Requested', case-insensitive). Calculate `critical_gap`: boolean (true if any day-one-critical resource ('Laptop', 'Email', or 'System Access') has a status of 'Blocked'). Calculate `blocked_resources`: array of strings containing the resource names that have a 'Blocked' status. Output a JSON object strictly matching exactly these three fields: {\"access_gap\": bool, \"critical_gap\": bool, \"blocked_resources\": []}. Do not include calculated_day_in_program or live_exception in the final JSON output.",
+                "services": [
+                  "output_artifacts"
+                ],
+                "depends_on": [
+                  "fetch_provisioning_data"
+                ],
+                "code_cell": "# Namespaced condition helper\ncond_has_critical_gap_output = globals().get(\"step_analyze_provisioning_data_output\", {})\ncond_has_critical_gap_result = cond_has_critical_gap_output.get(\"critical_gap\", False)\n\nprint(cond_has_critical_gap_result)\n",
+                "next_steps": [
+                  {
+                    "step_id": "send_slack_alert",
+                    "condition": {
+                      "id": "has_critical_gap",
+                      "name": "Has Critical Gap",
+                      "description": "Proceeds only if a critical gap is detected.",
+                      "agent_prompt": "Evaluate the JSON output from the analyze_provisioning_data step. Return True if the `critical_gap` field is True, and False otherwise.",
+                      "condition_code_cell": "# Namespaced condition helper for condition 'has_critical_gap'\n# This code evaluates whether a critical provisioning gap exists based on the analysis step output.\n\n# Retrieve the analysis results from the previous step\ncond_has_critical_gap_step_output = globals().get(\"step_analyze_provisioning_data_output\", {})\n\n# Determine if the critical gap flag is set to True\n# We use bool() to ensure the output is a clean boolean for the engine to parse.\ncond_has_critical_gap_decision = bool(cond_has_critical_gap_step_output.get(\"critical_gap\", False))\n\n# Output ONLY the boolean result\nprint(cond_has_critical_gap_decision)\n"
+                    }
+                  },
+                  {
+                    "step_id": "log_successful_provisioning",
+                    "condition": {
+                      "id": "no_critical_gap",
+                      "name": "No Critical Gap",
+                      "description": "Proceeds if no critical gap is detected.",
+                      "agent_prompt": "Evaluate the JSON output from the analyze_provisioning_data step. Return True if the `critical_gap` field is False, and False otherwise.",
+                      "condition_code_cell": "# Namespaced condition helper for condition 'no_critical_gap'\n# This code evaluates if there are NO critical provisioning gaps based on the analysis output.\n\n# Retrieve the analysis results from the step 'analyze_provisioning_data'\n# We expect a dictionary containing 'critical_gap': bool\ncond_no_critical_gap_step_output = globals().get(\"step_analyze_provisioning_data_output\", {})\n\n# The prompt asks to return True if 'critical_gap' is False, and False otherwise.\n# If the key is missing, we default to False (meaning we don't proceed to 'no_critical_gap')\ncond_no_critical_gap_is_critical = cond_no_critical_gap_step_output.get(\"critical_gap\", True)\ncond_no_critical_gap_decision = not bool(cond_no_critical_gap_is_critical)\n\n# Output ONLY the boolean result for the engine to parse\nprint(cond_no_critical_gap_decision)\n"
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "send_slack_alert",
+                "name": "Send Slack Alert",
+                "description": "Send a Slack alert to the team notifying them of the critical provisioning gap.",
+                "agent_prompt": "Send a message to the provided 'slack_channel' using the platform's Slack integration. The message should state that a critical provisioning gap was found, explicitly mentioning the `employee_id` and the `blocked_resources` list from the `analyze_provisioning_data` step output.",
+                "services": [
+                  "slack"
+                ],
+                "depends_on": [
+                  "analyze_provisioning_data"
+                ],
+                "next_steps": [
+                  {
+                    "step_id": "escalate_provisioning_exception"
+                  }
+                ]
+              },
+              {
+                "id": "escalate_provisioning_exception",
+                "name": "Escalate Provisioning Exception",
+                "description": "Human-in-the-loop step that logs a Provisioning Exception for review if critical day-one resources are blocked.",
+                "agent_prompt": "Create a human input form to log and review a Provisioning Exception. The form should display the Employee ID from user inputs and the list of 'blocked_resources' from the analyze_provisioning_data step. Ask the reviewer (e.g., Workbench user) if they acknowledge the escalation and prompt for any review notes. Use create_human_input_form to generate this form.",
+                "services": [
+                  "human_input_form"
+                ],
+                "is_human_input_step": true,
+                "depends_on": [
+                  "send_slack_alert"
+                ],
+                "next_steps": []
+              },
+              {
+                "id": "log_successful_provisioning",
+                "name": "Log Successful Provisioning",
+                "description": "Logs a success message indicating that no critical gaps were found and the provisioning check is complete.",
+                "agent_prompt": "Print a summary message indicating that no critical provisioning gaps were found for the employee, and that onboarding access is on track.",
+                "services": [],
+                "depends_on": [
+                  "analyze_provisioning_data"
+                ],
+                "next_steps": []
+              }
+            ],
+            "pip_packages": [
+              "supabase",
+              "requests",
+              "python-dateutil",
+              "slack_sdk"
+            ],
+            "integration_overrides": {}
+          }
+        }
+      ]
+    }
+  ],
+  "schedules": [],
+  "integrationsManifest": {
+    "services": [
+      "human_input_form",
+      "output_artifacts",
+      "slack",
+      "supabase"
+    ],
+    "envNames": [
+      "SUPABASE_ANON_KEY",
+      "SUPABASE_URL"
+    ]
+  }
+}
