@@ -9,7 +9,7 @@
 
 ## What this is
 
-An AI Employee that watches every new hire's 90-day onboarding journey, detects early risk signals, and triggers governed interventions before at-risk hires quit — without exposing sensitive employee disclosures to the wrong people.
+An AI Employee that watches every new hire's 90-day onboarding journey, detects early risk signals, and triggers governed interventions before at-risk hires quit — without exposing sensitive employee disclosures to the wrong people. This is to address issues faced by employees before deciding to quit the company.
 
 **Outcome metric:** Task completion rate + Day-90 retention prediction across a 60-hire cohort.
 
