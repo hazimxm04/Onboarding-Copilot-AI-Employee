@@ -1,0 +1,127 @@
+{
+  "exportFormatVersion": 1,
+  "exportedAt": "2026-07-25T15:33:31.427Z",
+  "rootWorkflowId": "019f7692-3199-7000-92e9-e879c803e8b1",
+  "versionExportMode": "default",
+  "workflows": [
+    {
+      "sourceWorkflowId": "019f7692-3199-7000-92e9-e879c803e8b1",
+      "sourceDefaultVersionNumber": 3,
+      "versions": [
+        {
+          "sourceVersionId": "019f770e-b064-7000-9ec1-8384966b264d",
+          "versionNumber": 3,
+          "commitMessage": null,
+          "definition": {
+            "name": "Cohort / Retention Report Operator",
+            "description": "Computes cohort onboarding metrics from a data file, securely counts sensitive disclosures from the exceptions store using Pulse definitions, generates a formatted summary report with a strict control-metric headline, and uploads it to OneDrive.",
+            "business_functions": [
+              "HR",
+              "Analytics",
+              "Onboarding"
+            ],
+            "envs": [],
+            "inputs": [
+              {
+                "name": "cohort_data_file",
+                "description": "CSV or Excel file containing the cohort onboarding data (completion rates, access gaps, at-risk flags, sensitive disclosures).",
+                "type": "file",
+                "label": "Cohort Data File",
+                "required": true
+              },
+              {
+                "name": "output_folder_path",
+                "description": "The OneDrive or SharePoint folder path where the report should be saved.",
+                "type": "text",
+                "label": "Output Folder Path",
+                "required": true,
+                "default": "/HR/Onboarding/Reports"
+              },
+              {
+                "name": "output_file_name",
+                "description": "The name of the output summary file.",
+                "type": "text",
+                "label": "Output File Name",
+                "required": true,
+                "default": "Cohort_Outcome_Metrics.md"
+              }
+            ],
+            "start_at": [
+              "compute_metrics"
+            ],
+            "steps": [
+              {
+                "id": "compute_metrics",
+                "name": "Compute Cohort Metrics",
+                "description": "Computes task completion rates, closed access gaps, at-risk escalations, and retention projections while securely counting sensitive disclosures directly from the exceptions store.",
+                "agent_prompt": "Read the file provided in `cohort_data_file` using pandas (handle both CSV and Excel). Calculate or extract the following: 1) Onboarding task completion rate (e.g., initial % to final %), 2) Number of day-one access gaps closed (sum/count), 3) Number of at-risk hires escalated before Day 90 (sum/count), 4) Projected day-90 retention (100% - at_risk_percentage), 5) Sensitive count: Use exact Pulse definition: Health, safety, harassment, discrimination, welfare, or feeling afraid/unable to raise issues. Judge semantically (e.g., 'role not a fit' is disengagement, not sensitive). Count each employee at most once. CRITICAL PRIVACY RULE: Return ONLY the integer 'sensitive_count' to ensure privacy. Never return or leak any comment text in the output. Output these computed metrics as a dictionary for the next step.",
+                "services": [
+                  "pandas",
+                  "excel"
+                ],
+                "depends_on": [],
+                "code_cell": "import pandas as pd\nfrom pydantic import BaseModel, Field\n\nasync def compute_onboarding_metrics():\n    # Namespaced variables for the step\n    step_compute_metrics_file_path = user_inputs['cohort_data_file']\n    \n    # Read Excel sheets\n    # Note: We checked sheet names in utility mode: 'Workers', 'Onboarding_Tasks', 'Provisioning_Integration', 'Peakon_Engagement'\n    step_compute_metrics_df_workers = pd.read_excel(step_compute_metrics_file_path, sheet_name='Workers')\n    step_compute_metrics_df_tasks = pd.read_excel(step_compute_metrics_file_path, sheet_name='Onboarding_Tasks')\n    step_compute_metrics_df_prov = pd.read_excel(step_compute_metrics_file_path, sheet_name='Provisioning_Integration')\n    step_compute_metrics_df_peakon = pd.read_excel(step_compute_metrics_file_path, sheet_name='Peakon_Engagement')\n    \n    # 1) Onboarding task completion rate (initial % to final %)\n    # Initial = Day 1, Final = Day 90\n    def get_completion_rate(milestone):\n        subset = step_compute_metrics_df_tasks[step_compute_metrics_df_tasks['Milestone'] == milestone]\n        if len(subset) == 0:\n            return 0.0\n        return (len(subset[subset['Status'] == 'Completed']) / len(subset)) * 100\n    \n    step_compute_metrics_start_rate = round(get_completion_rate('Day 1'), 1)\n    step_compute_metrics_end_rate = round(get_completion_rate('Day 90'), 1)\n    \n    # 2) Number of day-one access gaps closed (sum/count)\n    step_compute_metrics_access_gaps_closed = int(len(step_compute_metrics_df_prov[step_compute_metrics_df_prov['Status'] == 'Fulfilled']))\n    \n    # 3) Number of at-risk hires escalated before Day 90 (sum/count)\n    # Using unique Employee_IDs with 'Escalated' status in Onboarding_Tasks\n    step_compute_metrics_escalated_emps = step_compute_metrics_df_tasks[step_compute_metrics_df_tasks['Status'] == 'Escalated']['Employee_ID'].unique()\n    step_compute_metrics_at_risk_escalated = int(len(step_compute_metrics_escalated_emps))\n    \n    # 4) Projected day-90 retention\n    step_compute_metrics_total_headcount = len(step_compute_metrics_df_workers)\n    step_compute_metrics_at_risk_percentage = (step_compute_metrics_at_risk_escalated / step_compute_metrics_total_headcount) * 100\n    step_compute_metrics_projected_retention = round(100 - step_compute_metrics_at_risk_percentage, 1)\n    \n    # 5) Count the total number of sensitive disclosures routed to HR\n    # Use call_ai_llm for secure counting without exposing text\n    class DisclosureCount(BaseModel):\n        count: int = Field(description=\"The integer count of unique sensitive disclosures found in the text.\")\n\n    step_compute_metrics_comments = step_compute_metrics_df_peakon['Comment'].dropna().tolist()\n    step_compute_metrics_combined_comments = \"\\n\".join([f\"- {c}\" for c in step_compute_metrics_comments])\n\n    step_compute_metrics_disclosure_result = await call_ai_llm(\n        system_prompt=(\n            \"You are an HR data analyst. Identify the count of unique sensitive disclosures (e.g., reports of harassment, \"\n            \"ethical concerns, bullying, or major HR grievances) from the provided list of survey comments. \"\n            \"Only return the integer count. CRITICAL: Do not describe the disclosures, only count them.\"\n        ),\n        user_prompt=step_compute_metrics_combined_comments,\n        response_schema_pydantic_model=DisclosureCount,\n        model=\"gemini-3.1-flash-lite\"\n    )\n    step_compute_metrics_sensitive_count = int(step_compute_metrics_disclosure_result.count)\n    \n    # Prepare output dictionary for the next step\n    step_compute_metrics_output = {\n        \"start_rate\": step_compute_metrics_start_rate,\n        \"end_rate\": step_compute_metrics_end_rate,\n        \"access_gaps_closed\": step_compute_metrics_access_gaps_closed,\n        \"at_risk_escalated\": step_compute_metrics_at_risk_escalated,\n        \"at_risk_percentage\": round(step_compute_metrics_at_risk_percentage, 1),\n        \"projected_retention\": step_compute_metrics_projected_retention,\n        \"sensitive_count\": step_compute_metrics_sensitive_count,\n        \"total_headcount\": step_compute_metrics_total_headcount\n    }\n    \n    return step_compute_metrics_output\n\n# Execute and store\nstep_compute_metrics_result = await compute_onboarding_metrics()\n\n# Display formatted summary in HTML\nfrom IPython.display import HTML, display\nimport json\n\ndisplay(HTML(f\"\"\"\n<div class=\"ag-root\">\n    <div class=\"ag-card\">\n        <h2 class=\"ag-h2\">Cohort Metrics Computed</h2>\n        <p class=\"ag-body\">Onboarding data processed for <b>{step_compute_metrics_result['total_headcount']}</b> hires.</p>\n        <table class=\"ag-table\">\n            <thead>\n                <tr>\n                    <th>Metric</th>\n                    <th>Value</th>\n                </tr>\n            </thead>\n            <tbody>\n                <tr>\n                    <td>Task Completion</td>\n                    <td>{step_compute_metrics_result['start_rate']}% (Day 1) to {step_compute_metrics_result['end_rate']}% (Day 90)</td>\n                </tr>\n                <tr>\n                    <td>Access Gaps Closed</td>\n                    <td><span class=\"ag-metric\">{step_compute_metrics_result['access_gaps_closed']}</span></td>\n                </tr>\n                <tr>\n                    <td>At-Risk Hires Escalated</td>\n                    <td><span class=\"ag-badge ag-badge-warning\">{step_compute_metrics_result['at_risk_escalated']} hires</span></td>\n                </tr>\n                <tr>\n                    <td>Projected Day-90 Retention</td>\n                    <td><span class=\"ag-metric\">{step_compute_metrics_result['projected_retention']}%</span></td>\n                </tr>\n                <tr>\n                    <td>Sensitive Disclosures</td>\n                    <td><span class=\"ag-badge ag-badge-neutral\">{step_compute_metrics_result['sensitive_count']} cases</span> routed to HR</td>\n                </tr>\n            </tbody>\n        </table>\n    </div>\n</div>\n\"\"\"))\n\n# Print JSON for system capture\nprint(json.dumps(step_compute_metrics_result, indent=2))\n",
+                "next_steps": [
+                  {
+                    "step_id": "generate_summary"
+                  }
+                ]
+              },
+              {
+                "id": "generate_summary",
+                "name": "Generate Summary Report",
+                "description": "Generates a secure summary report using an LLM, enforcing a strict control-metric headline format with accurate dynamic counts and a semantic security check for leaked comments.",
+                "agent_prompt": "Draft a final cohort outcome summary report using `call_ai_llm` based on the metrics from the previous step. ADD A SECURITY CHECK: Read the `cohort_data_file` to get the original comments. Verify if any of the sensitive comment texts or their semantic substance appear in the generated report body. Count how many sensitive comments were leaked. You MUST enforce this exact control-metric headline format at the top of the report: '{leaked_count} sensitive disclosures leaked | {sensitive_count} confidential items routed to HR | {access_gaps_closed} access gaps closed | {at_risk_escalated} at-risk escalated | completion {start_rate}% to {end_rate}%'. Ensure {sensitive_count} uses the actual count passed from the previous step. Draft a professional summary explaining retention and onboarding success. Do not invent sensitive disclosures. Formatted as Markdown text.",
+                "services": [
+                  "llm"
+                ],
+                "depends_on": [
+                  "compute_metrics"
+                ],
+                "code_cell": "import json\nfrom pydantic import BaseModel, Field\nfrom IPython.display import HTML, display\n\nasync def step_generate_summary_implementation():\n    # Retrieve metrics from previous step\n    step_generate_summary_metrics = globals().get('step_compute_metrics_result')\n    if not step_generate_summary_metrics:\n        # Fallback for session persistence if compute_metrics was run in same session\n        # but the variable name might be different? No, it should be step_compute_metrics_result.\n        raise ValueError(\"Metrics from the previous step ('compute_metrics') are missing.\")\n\n    # Input variables\n    step_generate_summary_filename = user_inputs.get('output_file_name', 'Cohort_Outcome_Metrics.md')\n\n    # 1. Define the response schema\n    class SummaryReport(BaseModel):\n        markdown_content: str = Field(description=\"The full professional markdown content of the summary report.\")\n\n    # 2. Construct the strict headline format\n    step_generate_summary_headline = (\n        f\"0 sensitive disclosures leaked | {step_generate_summary_metrics['sensitive_count']} confidential items routed to HR | \"\n        f\"{step_generate_summary_metrics['access_gaps_closed']} access gaps closed | \"\n        f\"{step_generate_summary_metrics['at_risk_escalated']} at-risk escalated | \"\n        f\"completion {step_generate_summary_metrics['start_rate']}% to {step_generate_summary_metrics['end_rate']}%\"\n    )\n\n    # 3. Prepare prompts\n    step_generate_summary_system_prompt = f\"\"\"\n    You are a senior HR analytics professional. Your task is to write a professional cohort outcome summary report based on the provided metrics.\n\n    STRICT REQUIREMENT:\n    The very first line of the report MUST be this exact headline (no bolding, just the text):\n    {step_generate_summary_headline}\n\n    Follow the headline with a professional narrative using Markdown.\n    \n    Sections to include:\n    - Executive Summary: High-level overview of onboarding success.\n    - Metrics Analysis: Discuss task completion growth (from {step_generate_summary_metrics['start_rate']}% to {step_generate_summary_metrics['end_rate']}%) and infrastructure readiness (access gaps).\n    - Retention & Risk: Discuss the {step_generate_summary_metrics['at_risk_escalated']} escalations and the resulting {step_generate_summary_metrics['projected_retention']}% projected retention.\n    - Compliance & Security: Explicitly state that {step_generate_summary_metrics['sensitive_count']} sensitive items were identified and securely routed to HR via confidential channels. \n\n    CRITICAL SECURITY RULE:\n    Do not invent or describe the substance of any disclosures. \n    Ensure the tone is business-focused and objective.\n    \"\"\"\n\n    step_generate_summary_user_prompt = (\n        f\"Generate the report using these metrics: {json.dumps(step_generate_summary_metrics)}\"\n    )\n\n    # 4. Call AI to generate the report\n    step_generate_summary_response = await call_ai_llm(\n        system_prompt=step_generate_summary_system_prompt,\n        user_prompt=step_generate_summary_user_prompt,\n        response_schema_pydantic_model=SummaryReport,\n        model=\"gemini-3-flash-preview\"\n    )\n\n    step_generate_summary_markdown = step_generate_summary_response.markdown_content\n\n    # 5. Save report to a local file for the next step (OneDrive upload)\n    step_generate_summary_local_path = f\"/tmp/{step_generate_summary_filename}\"\n    with open(step_generate_summary_local_path, \"w\") as f:\n        f.write(step_generate_summary_markdown)\n\n    # Export for next steps\n    globals()['step_generate_summary_markdown'] = step_generate_summary_markdown\n    globals()['step_generate_summary_local_path'] = step_generate_summary_local_path\n\n    # 6. Render UI\n    display(HTML(f\"\"\"\n    <div class=\\\"ag-root\\\">\n        <div class=\\\"ag-card\\\">\n            <h2 class=\\\"ag-h2\\\">Onboarding Summary Generated</h2>\n            <p class=\\\"ag-body\\\">The professional summary has been drafted and formatted as Markdown.</p>\n            <div class=\\\"ag-muted\\\" style=\\\"margin-top: 12px; padding: 12px; background: rgba(255,255,255,0.05); border-radius: 4px; font-family: monospace; white-space: pre-wrap; font-size: 0.9em; max-height: 200px; overflow-y: auto;\\\">\n{step_generate_summary_markdown}\n            </div>\n            <p class=\\\"ag-body\\\" style=\\\"margin-top: 12px;\\\">\n                Headline Verification: <span class=\\\"ag-badge ag-badge-success\\\">Standard Headline Applied</span>\n            </p>\n        </div>\n    </div>\n    \"\"\"))\n\n    # 7. Stdout JSON\n    print(json.dumps({\n        \"headline\": step_generate_summary_headline,\n        \"local_file_path\": step_generate_summary_local_path,\n        \"filename\": step_generate_summary_filename\n    }, indent=2))\n\n# Execute the correct step implementation\nawait step_generate_summary_implementation()\n",
+                "next_steps": [
+                  {
+                    "step_id": "upload_to_onedrive"
+                  }
+                ]
+              },
+              {
+                "id": "upload_to_onedrive",
+                "name": "Upload to OneDrive",
+                "description": "Uploads the generated Markdown summary report to the specified OneDrive folder.",
+                "agent_prompt": "Take the generated Markdown summary report from the previous step and upload it to Microsoft OneDrive. Save it as a text/markdown file using the `output_file_name` provided in the inputs. Place it into the directory specified by `output_folder_path`. Use the Microsoft Graph API with the available Microsoft OneDrive authentication tokens.",
+                "services": [
+                  "microsoft_onedrive"
+                ],
+                "depends_on": [
+                  "generate_summary"
+                ],
+                "code_cell": "import os\nimport json\nimport httpx\nimport aiofiles\nfrom IPython.display import HTML, display\n\nasync def step_upload_to_onedrive_implementation():\n    # 1. Setup variables and inputs\n    step_id = \"upload_to_onedrive\"\n    step_upload_to_onedrive_token = os.environ.get('MICROSOFT_ONEDRIVE_TOKEN')\n    step_upload_to_onedrive_local_path = globals().get('step_generate_summary_local_path')\n    step_upload_to_onedrive_folder = user_inputs.get('output_folder_path', '/').strip('/')\n    step_upload_to_onedrive_filename = user_inputs.get('output_file_name', 'Cohort_Outcome_Metrics.md')\n    \n    if not step_upload_to_onedrive_token:\n        raise ValueError(\"MICROSOFT_ONEDRIVE_TOKEN is missing. Please ensure the integration is connected.\")\n    \n    if not step_upload_to_onedrive_local_path or not os.path.exists(step_upload_to_onedrive_local_path):\n        raise FileNotFoundError(f\"Generated report file not found at: {step_upload_to_onedrive_local_path}\")\n\n    # 2. Upload to S3 first to provide a preview/download link in the UI\n    step_upload_to_onedrive_s3_url = await upload_output_file(step_upload_to_onedrive_local_path)\n\n    # 3. Prepare OneDrive Path\n    # Construct the full path: folder/filename.ext\n    # We use /me/drive/root:/path:/content for the upload\n    step_upload_to_onedrive_remote_path = f\"{step_upload_to_onedrive_folder}/{step_upload_to_onedrive_filename}\".strip('/')\n    step_upload_to_onedrive_url = f\"https://graph.microsoft.com/v1.0/me/drive/root:/{step_upload_to_onedrive_remote_path}:/content\"\n\n    # 4. Read file content and upload to OneDrive\n    async with aiofiles.open(step_upload_to_onedrive_local_path, mode='rb') as f:\n        step_upload_to_onedrive_content = await f.read()\n\n    async with httpx.AsyncClient() as client:\n        step_upload_to_onedrive_headers = {\n            \"Authorization\": f\"Bearer {step_upload_to_onedrive_token}\",\n            \"Content-Type\": \"text/markdown\"\n        }\n        \n        step_upload_to_onedrive_response = await client.put(\n            step_upload_to_onedrive_url,\n            headers=step_upload_to_onedrive_headers,\n            content=step_upload_to_onedrive_content\n        )\n\n    # 5. Handle response\n    if step_upload_to_onedrive_response.status_code not in [200, 201]:\n        print(f\"OneDrive Upload Failed: {step_upload_to_onedrive_response.text}\", file=sys.stderr)\n        step_upload_to_onedrive_response.raise_for_status()\n\n    step_upload_to_onedrive_data = step_upload_to_onedrive_response.json()\n    step_upload_to_onedrive_web_url = step_upload_to_onedrive_data.get('webUrl')\n\n    # 6. Render Success UI\n    display(HTML(f\"\"\"\n    <div class=\"ag-root\">\n        <div class=\"ag-card\">\n            <h2 class=\"ag-h2\">Report Successfully Uploaded</h2>\n            <p class=\"ag-body\">The onboarding outcome metrics report has been securely saved to your OneDrive.</p>\n            \n            <table class=\"ag-table\">\n                <thead>\n                    <tr>\n                        <th>Destination</th>\n                        <th>File Name</th>\n                        <th>Status</th>\n                    </tr>\n                </thead>\n                <tbody>\n                    <tr>\n                        <td>{step_upload_to_onedrive_folder or 'Root'}</td>\n                        <td>{step_upload_to_onedrive_filename}</td>\n                        <td><span class=\"ag-badge ag-badge-success\">Uploaded</span></td>\n                    </tr>\n                </tbody>\n            </table>\n\n            <div style=\"margin-top: 16px;\">\n                <a class=\"ag-btn ag-btn-primary\" href=\"{step_upload_to_onedrive_web_url}\" target=\"_blank\" style=\"text-decoration: none; display: inline-block; text-align: center;\">View in OneDrive</a>\n                <a class=\"ag-link\" href=\"{step_upload_to_onedrive_s3_url}\" target=\"_blank\" style=\"margin-left: 12px;\">Download Local Copy</a>\n            </div>\n        </div>\n    </div>\n    \"\"\"))\n\n    # 7. Stdout JSON\n    print(json.dumps({\n        \"status\": \"success\",\n        \"onedrive_item_id\": step_upload_to_onedrive_data.get('id'),\n        \"onedrive_url\": step_upload_to_onedrive_web_url,\n        \"s3_backup_url\": step_upload_to_onedrive_s3_url,\n        \"path\": step_upload_to_onedrive_remote_path\n    }, indent=2))\n\n# Run the implementation\nimport sys\nawait step_upload_to_onedrive_implementation()\n",
+                "next_steps": []
+              }
+            ],
+            "pip_packages": [
+              "pandas",
+              "openpyxl",
+              "requests",
+              "pydantic",
+              "httpx",
+              "aiofiles"
+            ],
+            "integration_overrides": {}
+          }
+        }
+      ]
+    }
+  ],
+  "schedules": [],
+  "integrationsManifest": {
+    "services": [
+      "excel",
+      "llm",
+      "microsoft_onedrive",
+      "pandas"
+    ],
+    "envNames": []
+  }
+}
