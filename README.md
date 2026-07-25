@@ -31,12 +31,7 @@ New hires are tracked from Day 1 through their onboarding milestones. The system
 
 7-operator system coordinated by a central Orchestrator:
 
-Intake & Data Prep → Manager Lookup
-→ [Provisioning Watch ∥ Pulse & Sentiment ∥ Task Cadence] (parallel)
-→ Risk Scoring
-→ [Confidential Route | Manager Nudge | Human Review | Log & Continue] (branch)
-→ Final Report → Send HR Report Email
-
+![Orchestrator Flow](architecture/hr_ai_employee_orchestrator_flow.png)
 
 **Design principles applied throughout:**
 - **Tools vs. policy, kept separate.** Every operator that fetches data returns facts, not decisions. Thresholds (`AT_RISK_PULSE_FLOOR`, `STALLED_COUNT_THRESHOLD`, `disengaged_threshold`) live as editable configuration, not buried in prompt text — a business user can retune the system without touching code.
@@ -162,6 +157,34 @@ Each of the 7 operators worked reliably in isolation — tested individually wit
 These are the same problems that motivated Kubernetes, message queues, and service meshes in production systems. I now understand why those tools exist.
 
 Working with a non-technical collaborator (accounting background) also taught me that the hardest translation in systems work isn't between programming languages — it's between business logic and technical implementation. Getting the sensitive disclosure routing right required genuinely understanding the HR compliance reasoning behind it, not just building what was asked.
+
+---
+## Future improvements
+
+- **Rebuild orchestration in code** — reimplement the coordination layer 
+  in Python (FastAPI + Celery or a simple job queue) to own retry logic, 
+  timeout handling, and field mapping explicitly rather than through a 
+  platform abstraction that proved difficult to debug
+
+- **Complete remaining test cases** — EMP7007 (Mei) is the highest priority: 
+  the disengaged-but-not-sensitive case that would prove the confidential 
+  route doesn't over-trigger; followed by clean end-to-end re-runs of 
+  EMP7003 and EMP7005 through the final Orchestrator build
+
+- **Add a webhook trigger** — replace manual Employee_ID entry with an 
+  event-driven trigger (e.g. new hire created in Workday/BambooHR fires 
+  the pipeline automatically), making the system genuinely event-driven 
+  rather than manually triggered
+
+- **Enforce field contracts between operators** — define explicit 
+  input/output schemas per operator using Pydantic models, catching 
+  field-name mismatches (e.g. `Manager_ID` vs `Manager_WID`) at build 
+  time rather than at runtime during integration testing
+
+- **Scheduled milestone runs** — extend from on-demand single-hire 
+  processing to scheduled batch checks across all active hires at each 
+  milestone window (Day 7, 30, 60, 90), automatically triggering the 
+  pipeline when a hire's milestone changes
 
 ---
 
