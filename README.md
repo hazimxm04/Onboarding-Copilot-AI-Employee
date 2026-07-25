@@ -12,17 +12,21 @@
 An AI Employee that watches every new hire's 90-day onboarding journey, detects early risk signals, and triggers governed interventions before at-risk hires quit — without exposing sensitive employee disclosures to the wrong people. This is to address issues faced by employees before deciding to quit the company.
 
 **Outcome metric:** Task completion rate + Day-90 retention prediction across a 60-hire cohort.
+---
+## What it does
+
+New hires are tracked from Day 1 through their onboarding milestones. The system:
+
+1. **Fetches** the hire's record and calculates their current milestone window
+2. **Checks three signals in parallel**: IT provisioning gaps, stalled onboarding tasks, and engagement sentiment (including *semantic* — not keyword — detection of sensitive personal disclosures)
+3. **Scores risk** against configurable thresholds
+4. **Routes automatically**, in priority order:
+   - A sensitive disclosure → confidential route straight to HR, bypassing the manager entirely, regardless of overall risk score
+   - An operational risk (stalled tasks, access gaps) → a Slack/Outlook nudge to the manager
+   - Anything ambiguous or with missing data → a human review form (never fabricates a result)
+5. **Aggregates** company-wide retention metrics into a report, delivered via email
 
 ---
-
-## The problem it solves
-
-HR teams manually track onboarding tasks, IT provisioning, and engagement scores across dozens of new hires simultaneously. At-risk signals (blocked laptop access, stalled compliance training, declining pulse scores) are often caught too late — after a hire has already disengaged or quit.
-
-This system automates detection and intervention, with one hard constraint: **sensitive employee disclosures (health, harassment, welfare) must route confidentially to HR only — never to a manager, never to a cohort report.**
-
----
-
 ## Architecture
 
 7-operator system coordinated by a central Orchestrator:
@@ -67,6 +71,7 @@ Final Report
 | Intervention & Escalation | Route: Slack nudge (manager) or confidential Outlook (HR only) | `manager_directory` + Slack + Outlook |
 | Cohort/Retention Report | Cohort-wide outcome metrics | All tables |
 
+See `/operators` for the exported operator definitions (real, working configuration — not pseudocode).
 ---
 
 ## Key design decisions
@@ -125,18 +130,34 @@ Synthetic HR dataset (60 hires, 5 tables) provided by hackathon organizers.
 
 ---
 
-## Known data traps (tested and handled)
+## Real bugs hit and fixed
 
-| Trap | How it's handled |
-|---|---|
-| Mixed-timezone dates in provisioning (Fulfilled_On before Requested_On) | Status-only logic, never date arithmetic |
-| Disengagement comment mistaken for sensitive disclosure | Semantic classification — "not the right fit" = disengagement, not confidential |
-| Genuine sensitive disclosures (health, harassment, conduct) | Flagged confidentially, comment text never copied downstream |
-| Missing manager email | Graceful fallback — no message sent, Workbench flagged instead |
-| Missing/null hire date | Intake escalates to Workbench, workflow stops rather than guessing |
+This wasn't a clean build — three genuine bugs surfaced during integration testing, each diagnosed from actual data/logs rather than guessed at:
 
+1. **Field-name mismatch** — Risk Scoring was written expecting `pulse_failed`/`task_failed` flags that the upstream operators never actually produced; the real fields were `disengaged`, `sensitive`, `task_stalled_count`, etc. Traced by comparing the Orchestrator's actual data handoff against each operator's real output.
+2. **Silent parallel-execution regression** — an early fix for a stalled operator accidentally serialized what should have been three concurrent checks. Caught by comparing execution timestamps in the audit trail, not by assuming a fix worked.
+3. **Manager lookup join mismatch** — an operator was built expecting a `Manager_ID` column that didn't exist in the dataset; the actual join key was `Manager_WID`. Found by reading the raw CSV schema directly rather than trusting an AI-generated diagnosis at face value.
 ---
+## Known test coverage
 
+The dataset includes deliberately planted edge cases, each designed to test one specific behavior:
+
+| Employee | Designed to test | Result |
+|---|---|---|
+| **EMP7001** | Clean onboarding, no gaps — the happy path | ✅ Confirmed: correctly resolved On Track, no escalation triggered |
+| **EMP7000** | Missing provisioning (laptop/access blocked) | ✅ Confirmed: correctly flagged At Risk and escalated |
+| **EMP7003 (Tariq)** | An indirect, non-keyword health-related disclosure — must bypass normal risk scoring and route confidentially to HR regardless of risk level | ⚠️ Confidential email delivery confirmed working through the full Orchestrator; the sensitive-flag detection itself was validated at the operator level but not re-confirmed on this exact case end-to-end |
+| **EMP7005 (Sarah)** | A second, differently-worded sensitive disclosure — proves the detection isn't overfit to one specific phrasing | ⬜ Not re-tested after the final build; planned but not completed |
+| **EMP7007 (Mei)** | Disengaged and clearly at-risk, but *not* sensitive — the sharpest edge case: must route to the manager, and must **not** trigger the confidential HR path | ⬜ Not tested — this is the single most valuable remaining test, since it's the one that would prove the sensitive/non-sensitive distinction doesn't over-trigger |
+
+**Also confirmed:**
+- Structural parallelism — verified directly from the dependency graph (Provisioning Watch, Pulse & Sentiment, and Task Cadence each depend only on Manager Lookup, not on each other)
+- Retry-then-escalate logic — present and enforced at the Orchestrator level for every subworkflow call
+
+**Honestly, what's left to verify, in priority order:** EMP7007 (Mei) first — it's the case most likely to expose a false positive in the sensitive-disclosure bypass — followed by re-confirming EMP7003 and EMP7005 through a clean, full end-to-end run each.
+
+See `/architecture` for the Workgraph diagram and a live escalation-form screenshot.
+---
 ## What I learned
 
 **Orchestrating distributed components is fundamentally harder than building individual ones.**
@@ -158,5 +179,6 @@ Working with a non-technical collaborator (accounting background) also taught me
 ## Files in this repo
 /exports — Supervity operator JSON exports (all 7 operators + orchestrator)
 /architecture — workflow diagrams and system overview screenshots
+/dataset - all dataset provided to test against the model built
 /dataset — schema documentation (no real data uploaded)
 README.md — this file
