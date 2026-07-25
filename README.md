@@ -31,32 +31,21 @@ New hires are tracked from Day 1 through their onboarding milestones. The system
 
 7-operator system coordinated by a central Orchestrator:
 
-New Hire Trigger (Employee_ID)
-↓
-Intake & Data Prep ← validates hire record, starts 90-day clock
-↓
-Manager Lookup ← fetches manager contact from directory
-↓
-┌──────────────────────────────────────┐
-│ PARALLEL FAN-OUT │
-│ Provisioning Watch Operator │ ← detects blocked day-one access
-│ Task Cadence Operator │ ← identifies stalled/overdue tasks
-│ Pulse & Sentiment Operator │ ← flags disengagement + sensitive disclosures
-└──────────────────────────────────────┘
-↓
-Operator Synchronization ← waits for ALL 3 before proceeding
-↓
-Risk Scoring Operator ← combines signals → risk_level
-↓
-BRANCH:
-├─ On Track → Log & Continue
-├─ At Risk → Intervention & Escalation → Slack nudge to manager
-├─ Sensitive → Intervention & Escalation → Confidential Outlook to HR only
-└─ Needs Review → Auto Workbench Escalation → Human review
-↓
-Cohort / Retention Report ← cohort-wide outcome metrics
-↓
-Final Report
+Intake & Data Prep → Manager Lookup
+→ [Provisioning Watch ∥ Pulse & Sentiment ∥ Task Cadence] (parallel)
+→ Risk Scoring
+→ [Confidential Route | Manager Nudge | Human Review | Log & Continue] (branch)
+→ Final Report → Send HR Report Email
+
+
+**Design principles applied throughout:**
+- **Tools vs. policy, kept separate.** Every operator that fetches data returns facts, not decisions. Thresholds (`AT_RISK_PULSE_FLOOR`, `STALLED_COUNT_THRESHOLD`, `disengaged_threshold`) live as editable configuration, not buried in prompt text — a business user can retune the system without touching code.
+- **Never fabricate on missing data.** Every operator escalates to a human Workbench form on invalid or incomplete input, rather than guessing.
+- **Retry once, then escalate.** Explicit rule enforced at the Orchestrator level for every subworkflow call.
+- **Semantic judgment only where it belongs.** Sensitive-disclosure detection uses contextual understanding, not keyword matching — deliberately, since the test cases include indirect language a keyword filter would miss. Everything else (thresholds, routing) is deterministic.
+
+See `/operators` for the exported operator definitions (real, working configuration — not pseudocode).
+
 ---
 
 ## Operator roles
