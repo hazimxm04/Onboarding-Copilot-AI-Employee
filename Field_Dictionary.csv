@@ -1,0 +1,7 @@
+Sheet,Description,Class
+Workers,"Workday worker report. Employee_ID, Worker_WID, Job_Profile, Job_Family, Manager_WID, Cost_Center, Hire_Date drives the 90-day clock",master
+Onboarding_Tasks,"Workday onboarding business-process steps. Milestone Day 1..Day 90, Status Not Started/In Progress/Completed/Escalated",transactional
+Provisioning_Integration,Workday->IT provisioning feed. Resource Laptop/Email/Badge/VPN/System Access; Blocked past start = missing day-one access,transactional
+Peakon_Engagement,"Workday Peakon Employee Voice. Score 0-10, Comment (sensitive disclosures here), blank Submitted_At = non-response",transactional
+Manager_Directory,Managers for escalation/nudges (Manager_WID),master
+SEEDED TRAP TYPES,missing day-one access · stalled compliance doc · disengaged hire · sensitive disclosure in a pulse,note
